@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/a-h/templ/parser/v2"
-	"github.com/a-h/templ/parser/v2/visitor"
 )
 
 // ComponentReference represents a reference to a component in HTML Element syntax
@@ -39,16 +38,37 @@ func (cc *ComponentCollector) Collect(tf *parser.TemplateFile) []ComponentRefere
 	// First pass: collect imports
 	cc.collectImports(tf)
 
-	// Second pass: collect components using visitor pattern
-	v := visitor.New()
-	v.ElementComponent = cc.visitElementComponent
-	_ = tf.Visit(v)
+	// Second pass: collect components using tree walking approach
+	cc.walkTemplate(tf)
 
 	return cc.components
 }
 
-// visitElementComponent handles ElementComponent nodes using the visitor pattern
-func (cc *ComponentCollector) visitElementComponent(n *parser.ElementComponent) error {
+// walkTemplate walks through all template nodes to collect component references
+func (cc *ComponentCollector) walkTemplate(t *parser.TemplateFile) {
+	for _, n := range t.Nodes {
+		hn, ok := n.(*parser.HTMLTemplate)
+		if !ok {
+			continue
+		}
+		cc.walkNodes(hn.Children)
+	}
+}
+
+// walkNodes walks through a slice of nodes recursively
+func (cc *ComponentCollector) walkNodes(nodes []parser.Node) {
+	for _, n := range nodes {
+		if comp, ok := n.(*parser.ElementComponent); ok {
+			cc.collectElementComponent(comp)
+		}
+		if h, ok := n.(parser.CompositeNode); ok {
+			cc.walkNodes(h.ChildNodes())
+		}
+	}
+}
+
+// collectElementComponent processes an ElementComponent node
+func (cc *ComponentCollector) collectElementComponent(n *parser.ElementComponent) {
 	// Split component name by dots and check if first part is an import
 	parts := strings.Split(n.Name, ".")
 
@@ -69,9 +89,6 @@ func (cc *ComponentCollector) visitElementComponent(n *parser.ElementComponent) 
 		Position:    n.NameRange.From,
 		Attributes:  n.Attributes,
 	})
-
-	// The default visitor implementation will handle visiting children
-	return nil
 }
 
 // GetUniqueComponents returns unique component references
