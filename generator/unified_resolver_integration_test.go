@@ -9,7 +9,7 @@ import (
 // TestUnifiedResolverLocalTemplateExtraction tests that the unified resolver
 // correctly extracts local template signatures
 func TestUnifiedResolverLocalTemplateExtraction(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	// Template with multiple local components
 	templContent := `package main
@@ -105,7 +105,7 @@ func (c MyComponent) Render(ctx context.Context, w io.Writer) error {
 
 // TestUnifiedResolverComponentSignatureStorage tests the component signature storage
 func TestUnifiedResolverComponentSignatureStorage(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	// Create a test signature
 	sig := ComponentSignature{
@@ -143,7 +143,7 @@ func TestUnifiedResolverComponentSignatureStorage(t *testing.T) {
 
 // TestUnifiedResolverClearAllCaches tests that cache clearing works for all caches
 func TestUnifiedResolverClearAllCaches(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	// Add some data to various caches
 	templContent := `package main

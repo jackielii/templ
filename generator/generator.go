@@ -116,7 +116,7 @@ func Generate(template *parser.TemplateFile, w io.Writer, opts ...GenerateOpt) (
 		tf:              template,
 		w:               NewRangeWriter(w),
 		sourceMap:       parser.NewSourceMap(),
-		unifiedResolver: NewAutoDetectUnifiedResolver(),
+		unifiedResolver: newAutoDetectUnifiedResolver(),
 	}
 	for _, opt := range opts {
 		if err = opt(g); err != nil {
@@ -139,7 +139,7 @@ type generator struct {
 	childrenVar string
 
 	options         GeneratorOptions
-	unifiedResolver UnifiedResolver
+	unifiedResolver AutoDetectUnifiedResolver
 	diagnostics     []parser.Diagnostic
 
 	// currentTemplate tracks the current Templ block being processed.
@@ -148,10 +148,8 @@ type generator struct {
 }
 
 func (g *generator) generate() (err error) {
-	// Extract local template signatures if unified resolver is available
-	if g.unifiedResolver != nil {
-		g.unifiedResolver.ExtractSignatures(g.tf)
-	}
+	// Extract local template signatures
+	g.unifiedResolver.ExtractSignatures(g.tf)
 
 	if err = g.collectAndResolveComponents(); err != nil {
 		return fmt.Errorf("failed to resolve components: %w", err)
@@ -194,9 +192,7 @@ func (g *generator) currentFileDir() string {
 
 // getCurrentPackagePath returns the Go package path for the current template file
 func (g *generator) getCurrentPackagePath() (string, error) {
-	if g.unifiedResolver == nil {
-		return "", fmt.Errorf("unified resolver not available")
-	}
+	// Unified resolver is always available
 	
 	// Use packages.Load to find the current package path
 	cfg := &packages.Config{
@@ -1699,7 +1695,7 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 
 	// In this block, we want to support { child } expression for templ.Component variables.
 	// Which means we only support local block variables, and not global variables.
-	if g.currentTemplate != nil && g.unifiedResolver != nil {
+	if g.currentTemplate != nil {
 		if templSig, ok := g.unifiedResolver.GetLocalTemplate(g.getTemplateName(g.currentTemplate)); ok {
 			// Check if expression value matches a parameter name with templ.Component type
 			exprValue := strings.TrimSpace(e.Value)

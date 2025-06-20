@@ -7,7 +7,7 @@ import (
 
 // TestUnifiedResolverBasicFunctionality tests the core functionality
 func TestUnifiedResolverBasicFunctionality(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	// Test cases covering different scenarios
 	testCases := []struct {
@@ -116,7 +116,7 @@ func TestUnifiedResolverBasicFunctionality(t *testing.T) {
 
 // TestUnifiedResolverCaching verifies caching behavior
 func TestUnifiedResolverCaching(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	fromDir, _ := filepath.Abs("./test-element-component")
 
@@ -147,7 +147,7 @@ func TestUnifiedResolverCaching(t *testing.T) {
 
 // TestUnifiedResolverCompatibilityMethod tests the ResolveComponent method
 func TestUnifiedResolverCompatibilityMethod(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	// This test might fail if run from a different working directory
 	// so we'll make it conditional based on the current working directory
@@ -167,7 +167,7 @@ func TestUnifiedResolverCompatibilityMethod(t *testing.T) {
 
 // TestUnifiedResolverClearCache tests cache management
 func TestUnifiedResolverClearCache(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	fromDir, _ := filepath.Abs("./test-element-component")
 
@@ -191,7 +191,7 @@ func TestUnifiedResolverClearCache(t *testing.T) {
 
 // TestUnifiedResolverModuleDetection tests module root detection
 func TestUnifiedResolverModuleDetection(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	testCases := []struct {
 		name    string

@@ -45,32 +45,6 @@ func (e ComponentResolutionError) Error() string {
 	return fmt.Sprintf("%s:%d:%d: %v", e.FileName, e.Position.Line, e.Position.Col, e.Err)
 }
 
-// UnifiedResolver provides unified resolution for both templ templates and Go components
-type UnifiedResolver interface {
-	// ResolveComponentFrom resolves a component starting from a specific directory (for code generation)
-	ResolveComponentFrom(fromDir, pkgPath, componentName string) (ComponentSignature, error)
-
-	// ResolveComponent resolves from current working directory (for compatibility)
-	ResolveComponent(pkgPath, componentName string) (ComponentSignature, error)
-
-	// ExtractSignatures extracts local template signatures from a template file
-	ExtractSignatures(tf *parser.TemplateFile)
-
-	// GetLocalTemplate returns a local template signature by name
-	GetLocalTemplate(name string) (ComponentSignature, bool)
-
-	// AddLocalTemplateAlias adds an alias for a local template
-	AddLocalTemplateAlias(alias, target string)
-
-	// AddComponentSignature adds a resolved component signature for code generation
-	AddComponentSignature(sig ComponentSignature)
-
-	// GetComponentSignature returns a component signature by qualified name
-	GetComponentSignature(qualifiedName string) (ComponentSignature, bool)
-
-	// ResolveComponentWithPosition resolves a component with position information for error reporting
-	ResolveComponentWithPosition(fromDir, pkgPath, componentName string, pos parser.Position, fileName string) (ComponentSignature, error)
-}
 
 // AutoDetectUnifiedResolver automatically detects module roots using modcheck.WalkUp
 // and provides unified resolution for both templ templates and Go components
@@ -81,9 +55,9 @@ type AutoDetectUnifiedResolver struct {
 	componentSigs  map[string]ComponentSignature // Resolved component signatures for code generation
 }
 
-// NewAutoDetectUnifiedResolver creates a new unified resolver that automatically detects module roots
-func NewAutoDetectUnifiedResolver() *AutoDetectUnifiedResolver {
-	return &AutoDetectUnifiedResolver{
+// newAutoDetectUnifiedResolver creates a new unified resolver that automatically detects module roots
+func newAutoDetectUnifiedResolver() AutoDetectUnifiedResolver {
+	return AutoDetectUnifiedResolver{
 		cache:          make(map[string]ComponentSignature),
 		overlay:        make(map[string][]byte),
 		localTemplates: make(map[string]ComponentSignature),

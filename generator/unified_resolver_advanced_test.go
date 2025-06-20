@@ -9,7 +9,7 @@ import (
 
 // TestUnifiedResolverAdvancedFeatures tests the advanced features merged from SymbolResolver
 func TestUnifiedResolverAdvancedFeatures(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	testCases := []struct {
 		name         string
@@ -78,7 +78,7 @@ func TestUnifiedResolverAdvancedFeatures(t *testing.T) {
 
 // TestUnifiedResolverPositionAwareErrors tests position-aware error reporting
 func TestUnifiedResolverPositionAwareErrors(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	pos := parser.Position{Line: 10, Col: 5, Index: 100}
 	fileName := "test.templ"
@@ -124,7 +124,7 @@ func TestUnifiedResolverPositionAwareErrors(t *testing.T) {
 
 // TestUnifiedResolverStructFields tests struct field extraction
 func TestUnifiedResolverStructFields(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	sig, err := resolver.ResolveComponentFrom(
 		"./test-element-component",
@@ -158,7 +158,7 @@ func TestUnifiedResolverStructFields(t *testing.T) {
 
 // TestUnifiedResolverGeneratedFileErrors tests error handling for generated files
 func TestUnifiedResolverGeneratedFileErrors(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	// This test verifies that the resolver can handle packages with _templ.go file errors
 	// Since we can't easily create such errors in a test, we'll just verify the resolver
@@ -183,7 +183,7 @@ func TestUnifiedResolverGeneratedFileErrors(t *testing.T) {
 
 // TestUnifiedResolverCachePerformance tests that caching improves performance
 func TestUnifiedResolverCachePerformance(t *testing.T) {
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	// First resolution - should be slower
 	sig1, err := resolver.ResolveComponentFrom(

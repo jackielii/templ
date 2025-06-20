@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/a-h/templ/parser/v2"
@@ -70,7 +71,7 @@ func enhancedMissingComponentDiagnoser(t *parser.TemplateFile) ([]parser.Diagnos
 	definedComponents := collectDefinedComponents(t)
 
 	// Create unified resolver
-	resolver := NewAutoDetectUnifiedResolver()
+	resolver := newAutoDetectUnifiedResolver()
 
 	// Check each component reference
 	for _, ref := range componentRefs {
@@ -86,8 +87,12 @@ func enhancedMissingComponentDiagnoser(t *parser.TemplateFile) ([]parser.Diagnos
 		}
 
 		// Try to resolve as a Go type implementing templ.Component
-		// Use current working directory as starting point for module detection
-		_, err := resolver.ResolveComponentWithPosition(".", "", ref.Name, parser.Position{}, "")
+		// Use template file directory as starting point for module detection
+		fileDir := "."
+		if t.Filepath != "" {
+			fileDir = filepath.Dir(t.Filepath)
+		}
+		_, err := resolver.ResolveComponentWithPosition(fileDir, "", ref.Name, parser.Position{}, "")
 		if err != nil {
 			// Component not found - add diagnostic
 			diags = append(diags, parser.Diagnostic{

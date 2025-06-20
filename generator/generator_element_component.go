@@ -528,12 +528,10 @@ func (g *generator) tryResolveStructMethod(componentName string) bool {
 				if typeName != "" {
 					// Look for signature with TypeName.MethodName
 					candidateSig := typeName + "." + methodName
-					if g.unifiedResolver != nil {
-						if _, ok := g.unifiedResolver.GetLocalTemplate(candidateSig); ok {
-							// Add alias mapping for future lookups
-							g.unifiedResolver.AddLocalTemplateAlias(componentName, candidateSig)
-							return true
-						}
+					if _, ok := g.unifiedResolver.GetLocalTemplate(candidateSig); ok {
+						// Add alias mapping for future lookups
+						g.unifiedResolver.AddLocalTemplateAlias(componentName, candidateSig)
+						return true
 					}
 				}
 			}
@@ -712,46 +710,42 @@ func (g *generator) collectAndResolveComponents() error {
 
 		if comp.PackageName == "" {
 			// Local component - check unified resolver first
-			if g.unifiedResolver != nil {
-				// First try local templates
-				if templSig, ok := g.unifiedResolver.GetLocalTemplate(comp.Name); ok {
-					sig = templSig
-					found = true
-				} else {
-					// If this looks like a struct method (var.Method), try to resolve it
-					if strings.Contains(comp.Name, ".") {
-						found = g.tryResolveStructMethod(comp.Name)
-						if found {
-							// Find the resolved signature in local templates
-							if templSig, ok := g.unifiedResolver.GetLocalTemplate(comp.Name); ok {
-								sig = templSig
-							}
+			// First try local templates
+			if templSig, ok := g.unifiedResolver.GetLocalTemplate(comp.Name); ok {
+				sig = templSig
+				found = true
+			} else {
+				// If this looks like a struct method (var.Method), try to resolve it
+				if strings.Contains(comp.Name, ".") {
+					found = g.tryResolveStructMethod(comp.Name)
+					if found {
+						// Find the resolved signature in local templates
+						if templSig, ok := g.unifiedResolver.GetLocalTemplate(comp.Name); ok {
+							sig = templSig
 						}
 					}
+				}
 
-					if !found {
-						// Use unified resolver for local package resolution
-						currentPkgPath, pkgErr := g.getCurrentPackagePath()
-						if pkgErr == nil {
-							sig, err = g.unifiedResolver.ResolveComponentFrom(g.currentFileDir(), currentPkgPath, comp.Name)
-							if err == nil {
-								found = true
-							}
-						} else {
-							err = pkgErr
+				if !found {
+					// Use unified resolver for local package resolution
+					currentPkgPath, pkgErr := g.getCurrentPackagePath()
+					if pkgErr == nil {
+						sig, err = g.unifiedResolver.ResolveComponentFrom(g.currentFileDir(), currentPkgPath, comp.Name)
+						if err == nil {
+							found = true
 						}
+					} else {
+						err = pkgErr
 					}
 				}
 			}
 		} else {
 			// Package import - use unified resolver with resolved import path
-			if g.unifiedResolver != nil {
-				importPath := g.resolveImportPath(comp.PackageName)
-				if importPath != "" {
-					sig, err = g.unifiedResolver.ResolveComponentFrom(g.currentFileDir(), importPath, comp.Name)
-					if err == nil {
-						found = true
-					}
+			importPath := g.resolveImportPath(comp.PackageName)
+			if importPath != "" {
+				sig, err = g.unifiedResolver.ResolveComponentFrom(g.currentFileDir(), importPath, comp.Name)
+				if err == nil {
+					found = true
 				}
 			}
 		}
@@ -783,9 +777,7 @@ func (g *generator) collectAndResolveComponents() error {
 			key = comp.PackageName + "." + comp.Name
 		}
 		sig.QualifiedName = key
-		if g.unifiedResolver != nil {
-			g.unifiedResolver.AddComponentSignature(sig)
-		}
+		g.unifiedResolver.AddComponentSignature(sig)
 	}
 
 	// Don't return an error if no component signatures are resolved

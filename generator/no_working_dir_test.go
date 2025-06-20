@@ -169,7 +169,7 @@ func TestEnhancedDiagnosticsWithoutWorkingDir(t *testing.T) {
 	templContent := `package main
 
 templ Page() {
-	@NonExistentComponent("test")
+	<NonExistentComponent test="value" />
 }
 `
 
