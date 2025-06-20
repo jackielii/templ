@@ -421,22 +421,25 @@ func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string
 	for _, node := range tf.Nodes {
 		switch n := node.(type) {
 		case *parser.HTMLTemplate:
-			// Parse the template signature to extract name and parameters
-			name, _, err := r.parseTemplateSignatureFromAST(n.Expression.Value)
-			if err != nil || name == "" {
-				// Fallback: try to extract just the name
-				parts := strings.Fields(n.Expression.Value)
-				if len(parts) > 0 {
-					name = strings.TrimSuffix(parts[0], "(")
-				}
+			// Use the parsed AST if available, otherwise fall back to parsing
+			var name string
+			if n.Expression.FuncDecl == nil {
+				return "", fmt.Errorf("HTML template %s does not have a valid function declaration", n.Name)
 			}
-			_ = name // Name extracted for potential future use
+			name = n.Expression.FuncDecl.Name.Name
+			// If this is a receiver method, create a composite name
+			if n.Expression.FuncDecl.Recv != nil && len(n.Expression.FuncDecl.Recv.List) > 0 {
+				receiverType := r.astTypeToString(n.Expression.FuncDecl.Recv.List[0].Type)
+				// Remove pointer indicator if present for consistent naming
+				receiverType = strings.TrimPrefix(receiverType, "*")
+				name = receiverType + "." + name
+			}
 
 			// Generate proper function signature
 			sb.WriteString("func ")
 			sb.WriteString(n.Expression.Value)
 			sb.WriteString(" templ.Component {\n")
-			sb.WriteString("\treturn templ.ComponentFunc(func(ctx context.Context, w io.Writer) error { return nil })\n")
+			sb.WriteString("\treturn templ.NopComponent\n")
 			sb.WriteString("}\n\n")
 
 		case *parser.CSSTemplate:
@@ -447,6 +450,7 @@ func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string
 			sb.WriteString("\treturn templ.ComponentCSSClass{}\n")
 			sb.WriteString("}\n\n")
 
+		// TODO: Script templates are deprecated?
 		case *parser.ScriptTemplate:
 			// Script templates with proper signatures
 			sb.WriteString("func ")
@@ -1088,6 +1092,25 @@ func (r *SymbolResolver) extractStructFieldsWithTypeAnalysis(t types.Type) []Par
 	return fields
 }
 
+// getPackagePathFromDir determines the package path from a directory
+func (r *SymbolResolver) getPackagePathFromDir(dir string) (string, error) {
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedModule,
+		Dir:  dir,
+	}
+
+	pkgs, err := packages.Load(cfg, ".")
+	if err != nil {
+		return "", err
+	}
+
+	if len(pkgs) == 0 {
+		return "", fmt.Errorf("no package found in directory %s", dir)
+	}
+
+	return pkgs[0].PkgPath, nil
+}
+
 // getTemplateName extracts the template name from an HTMLTemplate node
 func getTemplateName(tmpl *parser.HTMLTemplate) string {
 	if tmpl == nil {
@@ -1275,23 +1298,4 @@ func extractIfConditionVariables(expr parser.Expression) map[string]*TypeInfo {
 	}
 
 	return vars
-}
-
-// getPackagePathFromDir determines the package path from a directory
-func (r *SymbolResolver) getPackagePathFromDir(dir string) (string, error) {
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedModule,
-		Dir:  dir,
-	}
-
-	pkgs, err := packages.Load(cfg, ".")
-	if err != nil {
-		return "", err
-	}
-
-	if len(pkgs) == 0 {
-		return "", fmt.Errorf("no package found in directory %s", dir)
-	}
-
-	return pkgs[0].PkgPath, nil
 }

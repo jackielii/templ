@@ -718,7 +718,7 @@ func FuzzFuncs(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		_, _, err := Func(s)
+		_, _, _, err := Func(s)
 		if err != nil {
 			t.Skip()
 			return
@@ -737,7 +737,7 @@ func TestFunc(t *testing.T) {
 	for _, test := range funcTests {
 		for i, suffix := range suffixes {
 			t.Run(fmt.Sprintf("%s_%d", test.name, i), func(t *testing.T) {
-				name, expr, err := Func(prefix + test.input + suffix)
+				name, expr, _, err := Func(prefix + test.input + suffix)
 				if err != nil {
 					t.Errorf("failed to parse slice args: %v", err)
 				}

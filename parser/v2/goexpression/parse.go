@@ -234,14 +234,14 @@ func SliceArgs(content string) (expr string, err error) {
 	return src[from:to], err
 }
 
-// Func returns the Go code up to the opening brace of the function body.
-func Func(content string) (name, expr string, err error) {
+// Func returns the Go code up to the opening brace of the function body along with the AST node.
+func Func(content string) (name, expr string, funcDecl *ast.FuncDecl, err error) {
 	prefix := "package main\n"
 	src := prefix + content
 
 	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
 	if node == nil {
-		return name, expr, parseErr
+		return name, expr, nil, parseErr
 	}
 
 	inspectFirstNode(node, func(n ast.Node) bool {
@@ -258,10 +258,11 @@ func Func(content string) (name, expr string, err error) {
 		}
 		expr = strings.Clone(src[start:end])
 		name = fn.Name.Name
+		funcDecl = fn
 		return false
 	})
 
-	return name, expr, err
+	return name, expr, funcDecl, err
 }
 
 func latestEnd(start int, nodes ...ast.Node) (end int) {

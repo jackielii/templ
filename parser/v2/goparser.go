@@ -13,13 +13,15 @@ func parseGoFuncDecl(prefix string, pi *parse.Input) (name string, expression Ex
 	from := pi.Index()
 	src, _ := pi.Peek(-1)
 	src = strings.TrimPrefix(src, prefix)
-	name, expr, err := goexpression.Func("func " + src)
+	name, expr, funcDecl, err := goexpression.Func("func " + src)
 	if err != nil {
 		return name, expression, parse.Error(fmt.Sprintf("invalid %s declaration: %v", prefix, err.Error()), pi.Position())
 	}
 	pi.Take(len(prefix) + len(expr))
 	to := pi.Position()
-	return name, NewExpression(expr, pi.PositionAt(from+len(prefix)), to), nil
+	expression = NewExpression(expr, pi.PositionAt(from+len(prefix)), to)
+	expression.FuncDecl = funcDecl
+	return name, expression, nil
 }
 
 func parseTemplFuncDecl(pi *parse.Input) (name string, expression Expression, err error) {

@@ -861,6 +861,7 @@ func TestTemplateParser(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			input := parse.NewInput(tt.input)
 			actual, matched, err := template.Parse(input)
+			actual.Expression.FuncDecl = nil // TODO: (JL) add expected FuncDecl to Expression
 			diff := cmp.Diff(tt.expected, actual)
 			switch {
 			case tt.expectError && err == nil:
