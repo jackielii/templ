@@ -459,6 +459,11 @@ func (g *generator) writeRestAppend(indentLevel int, restVarName string, key str
 }
 
 func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser.ElementComponent) (err error) {
+	// Ensure the template overlay is registered (this is a no-op if already registered)
+	if err = g.symbolResolver.RegisterTemplateOverlay(g.tf, g.options.FileName); err != nil {
+		return fmt.Errorf("failed to register template overlay: %w", err)
+	}
+
 	// Try to resolve component on-demand
 	currentPkgPath, _ := g.getCurrentPackagePath()
 	sigs, err := g.symbolResolver.ResolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)

@@ -6,7 +6,6 @@ import (
 	goparser "go/parser"
 	"go/token"
 	"go/types"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -490,21 +489,9 @@ func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath str
 	}, nil
 }
 
-// Register registers a template file for potential symbol resolution
-// This method generates an overlay that makes the templ file the single source of truth
-func (r *SymbolResolver) Register(tf *parser.TemplateFile, fileName string) error {
-	// Extract package name from the template file
-	pkgName := ""
-	if tf.Package.Expression.Value != "" {
-		pkgName = strings.TrimPrefix(tf.Package.Expression.Value, "package ")
-		pkgName = strings.TrimSpace(pkgName)
-	}
-
-	if pkgName == "" {
-		return fmt.Errorf("no package declaration found in template file")
-	}
-
-	// Generate overlay with the same name as the output file
+// RegisterTemplateOverlay registers a template file for symbol resolution by creating a Go overlay
+// This method generates an overlay that makes the templ file available to the Go package loader
+func (r *SymbolResolver) RegisterTemplateOverlay(tf *parser.TemplateFile, fileName string) error {
 	// Ensure fileName is absolute first
 	absFileName := fileName
 	if !filepath.IsAbs(fileName) {
@@ -516,43 +503,24 @@ func (r *SymbolResolver) Register(tf *parser.TemplateFile, fileName string) erro
 	}
 	overlayPath := strings.TrimSuffix(absFileName, ".templ") + "_templ.go"
 
+	// Check if already registered
+	if _, exists := r.overlay[overlayPath]; exists {
+		return nil // Already registered
+	}
+
+	// Extract package name from the template file
+	pkgName := ""
+	if tf.Package.Expression.Value != "" {
+		pkgName = strings.TrimPrefix(tf.Package.Expression.Value, "package ")
+		pkgName = strings.TrimSpace(pkgName)
+	}
+
+	if pkgName == "" {
+		return fmt.Errorf("no package declaration found in template file")
+	}
+
 	overlayContent := r.generateOverlay(tf, pkgName)
 	r.overlay[overlayPath] = []byte(overlayContent)
-
-	return nil
-}
-
-// processTemplFiles finds and processes all templ files in a directory
-func (r *SymbolResolver) processTemplFiles(dir string) error {
-	// Find all .templ files in the directory
-	templFiles, err := filepath.Glob(filepath.Join(dir, "*.templ"))
-	if err != nil {
-		return err
-	}
-
-	for _, templFile := range templFiles {
-		// Skip if we already have an overlay for this file
-		overlayPath := strings.TrimSuffix(templFile, ".templ") + "_templ.go"
-		if _, exists := r.overlay[overlayPath]; exists {
-			continue
-		}
-
-		// Parse the templ file
-		content, err := os.ReadFile(templFile)
-		if err != nil {
-			continue // Skip files we can't read
-		}
-
-		tf, err := parser.ParseString(string(content))
-		if err != nil {
-			continue // Skip files we can't parse
-		}
-
-		// Register the file to create overlay
-		if err := r.Register(tf, templFile); err != nil {
-			continue // Skip files we can't register
-		}
-	}
 
 	return nil
 }
@@ -564,29 +532,13 @@ func (r *SymbolResolver) ensurePackageLoaded(fromDir string) (*packages.Package,
 		return pkg, nil
 	}
 
-	// First, process all templ files in this directory to generate overlays
-	if err := r.processTemplFiles(fromDir); err != nil {
-		// Don't fail if we can't process templ files, just log it
-		// The package might still be loadable without them
-	}
-
 	cfg := &packages.Config{
 		Mode: packages.NeedName |
 			packages.NeedFiles |
-			packages.NeedCompiledGoFiles |
 			packages.NeedImports |
-			packages.NeedTypes |
-			packages.NeedSyntax |
-			packages.NeedTypesInfo |
-			packages.NeedModule,
+			packages.NeedTypes,
 		Dir:     fromDir,
 		Overlay: r.overlay,
-	}
-
-	// Process templ files in the package directory to generate overlays
-	// This ensures we have stubs for all templates in the package
-	if err := r.processTemplFiles(fromDir); err != nil {
-		// Don't fail - we can still try to load the package
 	}
 
 	pkgs, err := packages.Load(cfg, ".")
@@ -1013,8 +965,8 @@ type LocalScope struct {
 	Variables map[string]*TypeInfo // Variables defined in this scope
 }
 
-// NewGeneratorContext creates a new generator context
-func NewGeneratorContext() *GeneratorContext {
+// newGeneratorContext creates a new generator context
+func newGeneratorContext() *GeneratorContext {
 	return &GeneratorContext{
 		ASTPath:     []parser.Node{},
 		LocalScopes: []LocalScope{},

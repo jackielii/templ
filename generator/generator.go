@@ -116,6 +116,7 @@ func Generate(template *parser.TemplateFile, w io.Writer, opts ...GenerateOpt) (
 		w:              NewRangeWriter(w),
 		sourceMap:      parser.NewSourceMap(),
 		symbolResolver: newSymbolResolver(),
+		context:        newGeneratorContext(),
 	}
 	for _, opt := range opts {
 		if err = opt(g); err != nil {
@@ -146,16 +147,6 @@ type generator struct {
 }
 
 func (g *generator) generate() (err error) {
-	// Initialize context
-	g.context = NewGeneratorContext()
-
-	// Register template file for symbol resolution
-	if err = g.symbolResolver.Register(g.tf, g.options.FileName); err != nil {
-		return err
-	}
-
-	// Components are now resolved on-demand during code generation
-
 	if err = g.writeCodeGeneratedComment(); err != nil {
 		return
 	}
