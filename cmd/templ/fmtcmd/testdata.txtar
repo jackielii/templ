@@ -64,3 +64,32 @@ package test
 templ c(s string) {
   <div s={ s }/>
 }
+-- element.templ --
+package test
+
+templ Button(title string) {
+	<button>{ title }</button>
+}
+
+templ page() {
+<div>
+<Button   title={str()}/>
+<MyComponent prop={value} 
+enabled?={true}/>
+<Container child={<span>nested</span>}/>
+</div>
+}
+-- element.templ --
+package test
+
+templ Button(title string) {
+	<button>{ title }</button>
+}
+
+templ page() {
+	<div>
+		<Button title={ str() }/>
+		<MyComponent prop={ value } enabled?={ true }/>
+		<Container child={ <span>nested</span> }/>
+	</div>
+}

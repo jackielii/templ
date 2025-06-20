@@ -54,11 +54,9 @@ type TypeInfo struct {
 // SymbolResolver automatically detects module roots and provides unified resolution
 // for both templ templates and Go components across packages
 type SymbolResolver struct {
-	signatures     map[string]ComponentSignature // Cache keyed by fully qualified names
-	overlay        map[string][]byte             // Go file overlays for templ templates
-	packageCache   map[string]*packages.Package  // Cache of loaded packages by directory
-	currentPackage *packages.Package             // Current package being processed
-	currentPkgPath string                        // Current package path
+	signatures   map[string]ComponentSignature // Cache keyed by fully qualified names
+	overlay      map[string][]byte             // Go file overlays for templ templates
+	packageCache map[string]*packages.Package  // Cache of loaded packages by directory
 }
 
 // newSymbolResolver creates a new symbol resolver
@@ -389,19 +387,9 @@ func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string
 		switch n := node.(type) {
 		case *parser.HTMLTemplate:
 			// Use the parsed AST if available, otherwise fall back to parsing
-			var name string
-			funcDecl, ok := n.Expression.Stmt.(*ast.FuncDecl)
-			if !ok {
+			if _, ok := n.Expression.Stmt.(*ast.FuncDecl); !ok {
 				// Skip templates without valid function declarations
 				continue
-			}
-			name = funcDecl.Name.Name
-			// If this is a receiver method, create a composite name
-			if funcDecl.Recv != nil && len(funcDecl.Recv.List) > 0 {
-				receiverType := r.astTypeToString(funcDecl.Recv.List[0].Type)
-				// Remove pointer indicator if present for consistent naming
-				receiverType = strings.TrimPrefix(receiverType, "*")
-				name = receiverType + "." + name
 			}
 
 			// Generate proper function signature

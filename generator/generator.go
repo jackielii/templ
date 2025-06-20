@@ -60,6 +60,15 @@ func WithSkipCodeGeneratedComment() GenerateOpt {
 	}
 }
 
+// WithSkipElementComponentResolution skips element component resolution.
+// This is useful for formatting where component resolution is not needed.
+func WithSkipElementComponentResolution() GenerateOpt {
+	return func(g *generator) error {
+		g.options.SkipElementComponentResolution = true
+		return nil
+	}
+}
+
 type GeneratorOutput struct {
 	Options     GeneratorOptions    `json:"meta"`
 	SourceMap   *parser.SourceMap   `json:"sourceMap"`
@@ -76,6 +85,8 @@ type GeneratorOptions struct {
 	SkipCodeGeneratedComment bool
 	// GeneratedDate to include as a comment.
 	GeneratedDate string
+	// SkipElementComponentResolution skips element component resolution (for formatting).
+	SkipElementComponentResolution bool
 }
 
 // HasChanged returns true if the generated file should be written to disk, and therefore, also

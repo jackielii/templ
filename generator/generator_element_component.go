@@ -459,16 +459,28 @@ func (g *generator) writeRestAppend(indentLevel int, restVarName string, key str
 }
 
 func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser.ElementComponent) (err error) {
-	// Ensure the template overlay is registered (this is a no-op if already registered)
-	if err = g.symbolResolver.RegisterTemplateOverlay(g.tf, g.options.FileName); err != nil {
-		return fmt.Errorf("failed to register template overlay: %w", err)
-	}
+	var sigs ComponentSignature
 
-	// Try to resolve component on-demand
-	currentPkgPath, _ := g.getCurrentPackagePath()
-	sigs, err := g.symbolResolver.ResolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
-	if err != nil {
-		return fmt.Errorf("component %s at %s:%d:%d: %w", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col, err)
+	if g.options.SkipElementComponentResolution {
+		// For formatting, create a dummy signature that allows generation to proceed
+		sigs = ComponentSignature{
+			Name:          n.Name,
+			QualifiedName: n.Name,
+			IsStruct:      false,             // Treat as function for simplicity
+			Parameters:    []ParameterInfo{}, // Empty parameters
+		}
+	} else {
+		// Ensure the template overlay is registered (this is a no-op if already registered)
+		if err = g.symbolResolver.RegisterTemplateOverlay(g.tf, g.options.FileName); err != nil {
+			return fmt.Errorf("failed to register template overlay: %w", err)
+		}
+
+		// Try to resolve component on-demand
+		currentPkgPath, _ := g.getCurrentPackagePath()
+		sigs, err = g.symbolResolver.ResolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
+		if err != nil {
+			return fmt.Errorf("component %s at %s:%d:%d: %w", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col, err)
+		}
 	}
 
 	var vars []string
