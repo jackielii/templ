@@ -173,7 +173,7 @@ func (p *Server) parseTemplate(ctx context.Context, uri uri.URI, templateText st
 	// Use enhanced diagnostics if we have a working directory
 	var parsedDiagnostics []parser.Diagnostic
 	if p.workingDir != "" {
-		parsedDiagnostics, err = generator.DiagnoseWithSymbolResolution(template, p.workingDir)
+		parsedDiagnostics, err = generator.DiagnoseWithSymbolResolution(template)
 	} else {
 		parsedDiagnostics, err = parser.Diagnose(template)
 	}
@@ -305,7 +305,7 @@ func (p *Server) preload(ctx context.Context, workspaceFolders []lsp.WorkspaceFo
 				p.Log.Info("parseTemplate failure", slog.Any("error", err))
 			}
 			w := new(strings.Builder)
-			generatorOutput, err := generator.Generate(template, w, generator.WithWorkingDir(workspacePath))
+			generatorOutput, err := generator.Generate(template, w)
 			if err != nil {
 				// It's expected to have some failures while parsing the template, since
 				// you are likely to have invalid docs while you're typing.
@@ -808,9 +808,8 @@ func (p *Server) didOpen(ctx context.Context, params *lsp.DidOpenTextDocumentPar
 	// Generate the output code and cache the source map and Go contents to use during completion
 	// requests.
 	w := new(strings.Builder)
-	// Get working directory from file path
-	workingDir := filepath.Dir(strings.TrimPrefix(string(params.TextDocument.URI), "file://"))
-	generatorOutput, err := generator.Generate(template, w, generator.WithWorkingDir(workingDir))
+	// Working directory detection is now handled automatically by the unified resolver
+	generatorOutput, err := generator.Generate(template, w)
 	if err != nil {
 		return
 	}

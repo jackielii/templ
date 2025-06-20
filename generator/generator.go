@@ -60,14 +60,6 @@ func WithSkipCodeGeneratedComment() GenerateOpt {
 	}
 }
 
-// WithWorkingDir enables component resolution using the unified resolver
-// The working directory is now automatically detected using modcheck.WalkUp
-func WithWorkingDir(dir string) GenerateOpt {
-	return func(g *generator) error {
-		g.unifiedResolver = NewAutoDetectUnifiedResolver()
-		return nil
-	}
-}
 
 type GeneratorOutput struct {
 	Options     GeneratorOptions    `json:"meta"`
@@ -121,9 +113,10 @@ func HasChanged(previous, updated GeneratorOutput) bool {
 // to the location of the generated Go code in the output.
 func Generate(template *parser.TemplateFile, w io.Writer, opts ...GenerateOpt) (op GeneratorOutput, err error) {
 	g := &generator{
-		tf:        template,
-		w:         NewRangeWriter(w),
-		sourceMap: parser.NewSourceMap(),
+		tf:              template,
+		w:               NewRangeWriter(w),
+		sourceMap:       parser.NewSourceMap(),
+		unifiedResolver: NewAutoDetectUnifiedResolver(),
 	}
 	for _, opt := range opts {
 		if err = opt(g); err != nil {

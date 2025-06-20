@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/a-h/templ/cmd/templ/generatecmd/modcheck"
 	"github.com/a-h/templ/cmd/templ/visualize"
 	"github.com/a-h/templ/generator"
 	"github.com/a-h/templ/parser/v2"
@@ -243,16 +242,8 @@ func (h *FSEventHandler) generate(ctx context.Context, fileName string) (result 
 
 	var b bytes.Buffer
 	// Use the directory of the specific file being processed for symbol resolution
-	fileDir := filepath.Dir(fileName)
-
-	// Check if there's a go.mod file in fileDir or any parent directory up to that level
-	// If found, use that directory as working directory for proper module resolution
-	workingDir := fileDir
-	if modDir, err := modcheck.WalkUp(fileDir); err == nil {
-		workingDir = modDir
-	}
-
-	generatorOutput, err := generator.Generate(t, &b, append(h.genOpts, generator.WithFileName(relFilePath), generator.WithWorkingDir(workingDir))...)
+	// Working directory detection is now handled automatically by the unified resolver
+	generatorOutput, err := generator.Generate(t, &b, append(h.genOpts, generator.WithFileName(relFilePath))...)
 
 	// Always extract diagnostics from the generator, even if generation failed
 	parsedDiagnostics, diagErr := parser.Diagnose(t)
