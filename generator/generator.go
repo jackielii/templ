@@ -125,7 +125,7 @@ func Generate(template *parser.TemplateFile, w io.Writer, opts ...GenerateOpt) (
 		tf:             template,
 		w:              NewRangeWriter(w),
 		sourceMap:      parser.NewSourceMap(),
-		symbolResolver: newSymbolResolver(),
+		symbolResolver: globalSymbolResolver,
 		context:        newGeneratorContext(),
 	}
 	for _, opt := range opts {
@@ -148,12 +148,13 @@ type generator struct {
 	variableID  int
 	childrenVar string
 
-	options        GeneratorOptions
-	symbolResolver symbolResolver
-	diagnostics    []parser.Diagnostic
+	options     GeneratorOptions
+	diagnostics []parser.Diagnostic
 
 	// context tracks the current position in the AST for symbol resolution
 	context *generatorContext
+
+	symbolResolver *symbolResolver
 }
 
 func (g *generator) generate() (err error) {

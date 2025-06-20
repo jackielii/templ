@@ -119,18 +119,29 @@ func (g *generator) reorderElementComponentAttributes(sig componentSignature, n 
 	rest := make([]parser.Attribute, 0)
 	attrMap := make(map[string]parser.Attribute)
 	keyMap := make(map[string]parser.ConstantAttributeKey)
+	
+	// Debug
+	fmt.Printf("Debug: reorderElementComponentAttributes for %s with %d attributes\n", n.Name, len(n.Attributes))
+	
 	for _, attr := range n.Attributes {
 		keyed, ok := attr.(parser.KeyedAttribute)
 		if ok {
 			key, ok := keyed.AttributeKey().(parser.ConstantAttributeKey)
 			if ok {
+				// Debug: Attribute key: %s
 				if slices.ContainsFunc(sig.parameters, func(p parameterInfo) bool { return p.name == key.Name }) {
 					// Element component should only works with const key element.
 					attrMap[key.Name] = attr
 					keyMap[key.Name] = key
 					continue
+				} else {
+					// Debug: Not found in parameters
 				}
+			} else {
+				// Debug: Attribute key is not constant
 			}
+		} else {
+			// Debug: Attribute is not keyed
 		}
 		rest = append(rest, attr)
 	}
@@ -148,7 +159,12 @@ func (g *generator) reorderElementComponentAttributes(sig componentSignature, n 
 		var ok bool
 		ordered[i], ok = attrMap[param.name]
 		if !ok {
-			return elementComponentAttributes{}, fmt.Errorf("missing required attribute %s for component %s", param.name, n.Name)
+			// Debug: print what attributes we have
+			var attrNames []string
+			for k := range attrMap {
+				attrNames = append(attrNames, k)
+			}
+			return elementComponentAttributes{}, fmt.Errorf("missing required attribute %s for component %s (available: %v)", param.name, n.Name, attrNames)
 		}
 		keys[i], ok = keyMap[param.name]
 		if !ok {
@@ -470,9 +486,9 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 			parameters:    []parameterInfo{}, // Empty parameters
 		}
 	} else {
-		// Ensure the template overlay is registered (this is a no-op if already registered)
-		if err = g.symbolResolver.registerTemplOverlay(g.tf, g.options.FileName); err != nil {
-			return fmt.Errorf("failed to register template overlay: %w", err)
+		// Register overlay for single file mode including dependencies
+		if err = g.symbolResolver.registerSingleFileWithDependencies(g.tf, g.options.FileName); err != nil {
+			return fmt.Errorf("failed to register template overlay with dependencies: %w", err)
 		}
 
 		// Try to resolve component on-demand
@@ -480,6 +496,11 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 		sigs, err = g.symbolResolver.resolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
 		if err != nil {
 			return fmt.Errorf("component %s at %s:%d:%d: %w", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col, err)
+		}
+		// Debug: print signature info
+		fmt.Printf("Debug: Component %s has %d parameters\n", n.Name, len(sigs.parameters))
+		for i, p := range sigs.parameters {
+			fmt.Printf("  [%d] %s: %s\n", i, p.name, p.typ)
 		}
 	}
 

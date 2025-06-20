@@ -130,6 +130,42 @@ func (cmd Generate) Run(ctx context.Context) (err error) {
 	// Start timer.
 	start := time.Now()
 
+	// Preprocessing phase: Scan all templ files first
+	cmd.Log.Debug("Starting preprocessing phase")
+	var templFiles []string
+	preprocessEvents := make(chan fsnotify.Event)
+	go func() {
+		if err := watcher.WalkFiles(ctx, cmd.Args.Path, cmd.WatchPattern, preprocessEvents); err != nil {
+			cmd.Log.Error("Preprocessing walk failed", slog.Any("error", err))
+		}
+		close(preprocessEvents)
+	}()
+	
+	// Collect all templ files
+	for event := range preprocessEvents {
+		if strings.HasSuffix(event.Name, ".templ") {
+			templFiles = append(templFiles, event.Name)
+		}
+	}
+	
+	// Run preprocessing if we have templ files
+	if len(templFiles) > 0 {
+		preprocessResult, err := generator.PreprocessTemplFiles(cmd.Args.Path, templFiles)
+		if err != nil {
+			cmd.Log.Error("Preprocessing failed", slog.Any("error", err))
+			return fmt.Errorf("preprocessing failed: %w", err)
+		}
+		if preprocessResult.ElementComponentsDetected {
+			internalPackages := preprocessResult.GetInternalPackages()
+			cmd.Log.Info("Preprocessing complete", 
+				slog.Bool("elementComponentsDetected", true),
+				slog.Int("templFileCount", len(preprocessResult.TemplFiles)),
+				slog.Int("internalPackageCount", len(internalPackages)))
+		} else {
+			cmd.Log.Debug("No ElementComponent syntax detected, skipping preprocessing")
+		}
+	}
+
 	// Create channels:
 	// For the initial filesystem walk and subsequent (optional) fsnotify events.
 	events := make(chan fsnotify.Event)

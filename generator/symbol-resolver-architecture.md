@@ -231,6 +231,129 @@ The unified symbol resolver integrates with:
 4. **Formatter**: Skip resolution option for performance when not needed
 5. **Import Processing**: Automatic module detection for proper resolution
 
+## Current Architecture Problem
+
+### The Global Instance Challenge
+
+Currently, the symbol resolver is instantiated as a global singleton (`globalSymbolResolver`), but there are fundamental issues with this approach:
+
+1. **Overlay Building**: The overlay (fake `_templ.go` files) needs to be built comprehensively based on the topological order of package dependencies.
+   - Leaf packages must be loaded first to avoid circular dependencies
+   - The overlay can't be built gradually as each generator instance runs
+
+2. **Resource Efficiency**: With the current design where each generator creates its own instance:
+   - Symbol resolution data is recreated for every file being generated
+   - Package loading happens repeatedly for the same packages
+   - This defeats the purpose of caching and reusing type information
+
+3. **Selective Enablement**: Symbol resolution should only be enabled when ElementComponent syntax is detected in the codebase.
+
+### Ideal Architecture Design
+
+The ideal process follows a dependency-aware approach:
+
+1. **Scanning Phase**:
+   - Scan all files to find those using ElementComponent syntax
+   - Identify dependencies between packages
+   - Build a dependency tree with proper hierarchy
+
+2. **Dependency Tree Structure**:
+   - **Root nodes**: Packages that use ElementComponent syntax
+   - **Leaf nodes**: Packages that may or may not use ElementComponent syntax
+   - The tree represents the dependency flow from packages using ElementComponents down to their dependencies
+
+3. **Topological Processing**:
+   - Sort packages topologically based on dependencies
+   - Group parsed files into trees based on their ElementComponent usage
+   - Process leaf packages first, then work up to root packages
+
+4. **Generation Phase Optimization**:
+   - When encountering an ElementComponent during generation
+   - Look up the pre-built dependency tree
+   - Ensure leaf packages are loaded first
+   - Avoid overloading or redundant processing
+
+This approach ensures:
+- No redundant package loading
+- Proper dependency resolution order
+- Efficient memory usage
+- Only processes what's necessary
+
+### Key Insight: Internal vs External Packages
+
+The dependency tree naturally divides packages into two categories:
+
+1. **Internal Packages** (in the dependency tree):
+   - Packages that use ElementComponent syntax (roots)
+   - Their dependencies within the same module/project
+   - These need overlays generated from their `.templ` files
+   - Must be preloaded in topological order
+
+2. **External Packages** (outside the dependency tree):
+   - Standard library packages
+   - Third-party dependencies
+   - Packages that don't participate in ElementComponent resolution
+   - Loaded on-demand without overlays (like regular Go packages)
+
+### Current Workaround: g.enableSymbolResolution
+
+The `g.enableSymbolResolution` flag is a temporary hack because the ideal dependency-aware logic hasn't been implemented yet. This flag currently:
+- Manually controls when symbol resolution is active
+- Doesn't consider the dependency tree structure
+- Leads to inefficient processing
+
+### Goals for the Redesigned Architecture
+
+1. **Smart Dependency Detection**:
+   - Build a complete dependency graph of packages
+   - Identify which packages use ElementComponent syntax
+   - Create a hierarchical tree structure
+
+2. **Efficient Preprocessing**:
+   - Process packages in correct topological order
+   - Build overlays only for packages that need them
+   - Cache results for reuse during generation
+
+3. **Optimized Generation**:
+   - Use pre-computed dependency trees
+   - Load packages in correct order when needed
+   - Eliminate redundant processing
+
+4. **Automatic Enablement**:
+   - Remove the need for manual `enableSymbolResolution` flag
+   - Automatically detect when symbol resolution is needed
+   - Enable only for relevant file trees
+
+### Implementation Plan
+
+1. **Phase 1: ElementComponent Detection**
+   - Scan all `.templ` files for `<ComponentName />` syntax
+   - Build a map of packages using ElementComponents
+   - Mark packages as "roots" or "leaves" in dependency tree
+
+2. **Phase 2: Dependency Graph Construction**
+   - Parse imports from all templ files
+   - Build directed graph of package dependencies
+   - Identify connected components containing ElementComponents
+
+3. **Phase 3: Topological Ordering**
+   - Sort packages based on dependencies
+   - Group into trees with ElementComponent packages at roots
+   - Ensure leaf packages come before their dependents
+
+4. **Phase 4: Preload All Required Packages**
+   - Load all packages in the dependency tree with overlays
+   - Process in topological order (leaves first)
+   - Cache all type information globally
+   - This ensures all necessary packages are ready before generation
+
+5. **Phase 5: Generation with Smart Package Resolution**
+   - During generation, if a package is requested:
+     - If it's in our dependency tree: return cached data (already loaded)
+     - If it's outside our dependency tree: treat as external package
+     - External packages are loaded without overlays (like go mod externals)
+   - This prevents redundant loading and ensures correct behavior
+
 ## Conclusion
 
 The unified symbol resolver represents a significant evolution in templ's type resolution capabilities. By combining template caching, expression analysis, and context-aware variable tracking into a single cohesive system, it provides:

@@ -7,7 +7,10 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/a-h/templ/parser/v2"
 	"golang.org/x/tools/go/packages"
@@ -48,17 +51,20 @@ type symbolTypeInfo struct {
 	isMap        bool
 }
 
+var globalSymbolResolver = newSymbolResolver()
+
 // symbolResolver automatically detects module roots and provides unified resolution
 // for both templ templates and Go components across packages
 type symbolResolver struct {
 	signatures   map[string]componentSignature // Cache keyed by fully qualified names
 	overlay      map[string][]byte             // Go file overlays for templ templates
 	packageCache map[string]*packages.Package  // Cache of loaded packages by directory
+	depGraph     *dependencyGraph              // Dependency graph for internal/external distinction
 }
 
 // newSymbolResolver creates a new symbol resolver
-func newSymbolResolver() symbolResolver {
-	return symbolResolver{
+func newSymbolResolver() *symbolResolver {
+	return &symbolResolver{
 		signatures:   make(map[string]componentSignature),
 		overlay:      make(map[string][]byte),
 		packageCache: make(map[string]*packages.Package),
@@ -68,8 +74,16 @@ func newSymbolResolver() symbolResolver {
 // resolveElementComponent resolves a component for element syntax during code generation
 // This is the main entry point for element component resolution
 func (r *symbolResolver) resolveElementComponent(fromDir, currentPkg string, componentName string, tf *parser.TemplateFile) (componentSignature, error) {
-	// First check cache
-	if sig, ok := r.signatures[componentName]; ok {
+	// Debug: componentName='%s', currentPkg='%s'
+	// For local components without a package prefix, we need to qualify them
+	cacheKey := componentName
+	if !strings.Contains(componentName, ".") && currentPkg != "" {
+		cacheKey = currentPkg + "." + componentName
+	}
+	
+	// First check cache with qualified name
+	if sig, ok := r.signatures[cacheKey]; ok {
+		// Debug: Found in cache
 		return sig, nil
 	}
 
@@ -86,6 +100,7 @@ func (r *symbolResolver) resolveElementComponent(fromDir, currentPkg string, com
 				localName = parts[1]
 			} else {
 				// Could be struct variable method: structVar.Method
+				// Debug: '%s' is not an import alias, treating as local
 				localName = componentName // Try as local component first
 			}
 		} else {
@@ -105,16 +120,22 @@ func (r *symbolResolver) resolveElementComponent(fromDir, currentPkg string, com
 		sig, err = r.resolveComponent(fromDir, packagePath, localName)
 	} else {
 		// Local resolution - try multiple strategies
+		// Debug: Trying local resolution for '%s'
 		sig, err = r.resolveLocalComponent(fromDir, currentPkg, localName, tf)
 	}
 
 	if err != nil {
+		// Debug: Failed to resolve '%s': %v
 		return componentSignature{}, err
 	}
 
-	// Cache with original component name for future lookups
-	sig.qualifiedName = componentName
-	r.signatures[componentName] = sig
+	// Cache with qualified name for future lookups
+	if !strings.Contains(componentName, ".") && currentPkg != "" {
+		sig.qualifiedName = currentPkg + "." + componentName
+	} else {
+		sig.qualifiedName = componentName
+	}
+	r.signatures[sig.qualifiedName] = sig
 
 	return sig, nil
 }
@@ -184,12 +205,15 @@ func (r *symbolResolver) parseImportPath(goCode, packageAlias string) string {
 }
 
 // resolveLocalComponent resolves a local component using package loading
-func (r *symbolResolver) resolveLocalComponent(fromDir, currentPkg, componentName string, tf *parser.TemplateFile) (componentSignature, error) {
+func (r *symbolResolver) resolveLocalComponent(fromDir, currentPkg, componentName string, _ *parser.TemplateFile) (componentSignature, error) {
 	// For dotted names, check if it's a struct method first
 	if strings.Contains(componentName, ".") {
-		if sig, ok := r.resolveStructMethod(componentName, tf, fromDir); ok {
+		// Debug: Trying to resolve struct method '%s'
+		if sig, ok := r.resolveStructMethod(componentName, fromDir); ok {
+			// Debug: Successfully resolved struct method '%s'
 			return sig, nil
 		}
+		// Debug: Failed to resolve struct method '%s'
 	}
 
 	// Use package resolution with overlays
@@ -211,7 +235,7 @@ func (r *symbolResolver) resolveLocalComponent(fromDir, currentPkg, componentNam
 }
 
 // resolveStructMethod resolves struct variable method components like structVar.Method
-func (r *symbolResolver) resolveStructMethod(componentName string, tf *parser.TemplateFile, fromDir string) (componentSignature, bool) {
+func (r *symbolResolver) resolveStructMethod(componentName string, fromDir string) (componentSignature, bool) {
 	parts := strings.Split(componentName, ".")
 	if len(parts) < 2 {
 		return componentSignature{}, false
@@ -221,14 +245,33 @@ func (r *symbolResolver) resolveStructMethod(componentName string, tf *parser.Te
 	methodName := strings.Join(parts[1:], ".")
 
 	// Ensure package is loaded with overlays
+	fmt.Printf("Debug resolveStructMethod: Loading package from dir %s, overlay has %d entries\n", fromDir, len(r.overlay))
 	pkg, err := r.ensurePackageLoaded(fromDir, "")
 	if err != nil {
+		fmt.Printf("Debug resolveStructMethod: Failed to load package: %v\n", err)
 		return componentSignature{}, false
 	}
+	fmt.Printf("Debug resolveStructMethod: Package loaded (PkgPath=%s), looking for variable %s\n", pkg.PkgPath, varName)
 
 	// Look for the variable in the package scope
 	obj := pkg.Types.Scope().Lookup(varName)
 	if obj == nil {
+		fmt.Printf("Debug resolveStructMethod: Variable '%s' not found in package scope\n", varName)
+		// List all names in the scope for debugging
+		fmt.Printf("Debug resolveStructMethod: Package scope names: ")
+		for _, name := range pkg.Types.Scope().Names() {
+			fmt.Printf("%s ", name)
+		}
+		fmt.Printf("\n")
+		// Check if there were package errors
+		if len(pkg.Errors) > 0 {
+			fmt.Printf("Debug resolveStructMethod: Package has %d errors:\n", len(pkg.Errors))
+			for i, err := range pkg.Errors {
+				if i < 5 { // Only show first 5 errors
+					fmt.Printf("  [%d] %v\n", i, err)
+				}
+			}
+		}
 		return componentSignature{}, false
 	}
 
@@ -248,8 +291,10 @@ func (r *symbolResolver) resolveStructMethod(componentName string, tf *parser.Te
 	// Look for the method
 	methodObj, _, _ := types.LookupFieldOrMethod(varType, true, pkg.Types, methodName)
 	if methodObj == nil {
+		// Debug: Method '%s' not found on type %s
 		return componentSignature{}, false
 	}
+	// Debug: Found method '%s' on type %s
 
 	// Extract signature
 	sig, err := r.extractComponentSignature(methodObj, pkg.PkgPath)
@@ -318,6 +363,14 @@ func (r *symbolResolver) resolveComponent(fromDir, pkgPath, componentName string
 	if err != nil {
 		return componentSignature{}, err
 	}
+	
+	// Debug
+	if componentName == "Button" {
+		fmt.Printf("Debug: resolveComponent extracted Button with %d params\n", len(sig.parameters))
+		for _, p := range sig.parameters {
+			fmt.Printf("  - %s: %s\n", p.name, p.typ)
+		}
+	}
 
 	// Set the fully qualified name for caching
 	if qualifiedName == "" {
@@ -336,88 +389,281 @@ func (r *symbolResolver) resolveComponent(fromDir, pkgPath, componentName string
 // generateOverlay creates Go stub code for templ templates
 func (r *symbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string) string {
 	var sb strings.Builder
+	var importSection strings.Builder
+	var bodySection strings.Builder
 
 	sb.WriteString(fmt.Sprintf("package %s\n\n", pkgName))
 
-	// First pass: collect imports and write top-level Go code
-	hasImports := false
-	hasTemplImport := false
+	// First pass: collect only necessary imports
+	// We need to determine which imports are actually used in the overlay
+	neededImports := make(map[string]bool)
+	neededImports["github.com/a-h/templ"] = true // Always need templ
+	
+	// Check what imports we need based on type definitions and method signatures
+	for _, node := range tf.Nodes {
+		switch n := node.(type) {
+		case *parser.TemplateFileGoExpression:
+			exprValue := n.Expression.Value
+			// Check for types that might need imports
+			if strings.Contains(exprValue, "type ") {
+				// Check the entire type definition for import needs
+				if strings.Contains(exprValue, "templ.") {
+					neededImports["github.com/a-h/templ"] = true
+				}
+				if strings.Contains(exprValue, "context.") {
+					neededImports["context"] = true
+				}
+				if strings.Contains(exprValue, "io.") {
+					neededImports["io"] = true
+				}
+			}
+			if strings.Contains(exprValue, "context.Context") {
+				neededImports["context"] = true
+			}
+			if strings.Contains(exprValue, "io.Writer") {
+				neededImports["io"] = true
+			}
+			if strings.Contains(exprValue, "fmt.") {
+				neededImports["fmt"] = true
+			}
+		case *parser.HTMLTemplate:
+			// Check template parameters for types that need imports
+			exprValue := n.Expression.Value
+			if strings.Contains(exprValue, "templ.") {
+				neededImports["github.com/a-h/templ"] = true
+			}
+		}
+	}
+	
+	// Now process imports, only including needed ones
 	for _, node := range tf.Nodes {
 		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
-			// This includes imports, type definitions, variables, etc.
 			exprValue := goExpr.Expression.Value
 
-			// Check if this is an import block
+			// Only include imports and type definitions that are needed for templates
+			includeInOverlay := false
+
+			// Process import statements
 			if strings.Contains(exprValue, "import") {
-				hasImports = true
-
-				// Check if templ is already imported
-				if strings.Contains(exprValue, "github.com/a-h/templ") && !strings.Contains(exprValue, "templ/generator") {
-					hasTemplImport = true
+				// Parse the imports to see what's being imported
+				imports := extractImports(exprValue)
+				
+				// Build a new import block with only needed imports
+				var neededImportsList []string
+				for _, imp := range imports {
+					if neededImports[imp] {
+						neededImportsList = append(neededImportsList, imp)
+					}
 				}
+				
+				// We'll handle imports separately
+				// Nothing to do here, imports are processed later
+			}
 
-				// If this is an import block and templ is not imported, add it
-				if strings.Contains(exprValue, "import (") && !hasTemplImport {
-					// Insert templ import into the existing import block
-					insertPos := strings.Index(exprValue, "import (") + len("import (")
-					exprValue = exprValue[:insertPos] + "\n\t\"github.com/a-h/templ\"" + exprValue[insertPos:]
-					hasTemplImport = true
+			// Include type definitions that might be used as receivers for templ methods
+			// or types that implement templ.Component
+			if strings.Contains(exprValue, "type ") {
+				// Include all type definitions, not just structs
+				includeInOverlay = true
+			}
+			
+			// Include simple variable declarations (like var structComp StructComponent)
+			// This is important for struct method resolution
+			if strings.HasPrefix(strings.TrimSpace(exprValue), "var ") {
+				// Include all var declarations, even if they have initializers
+				includeInOverlay = true
+			}
+
+			// Skip function implementations (they often reference imports we don't need)
+			// BUT include methods that might implement interfaces
+			if strings.Contains(exprValue, "func ") && strings.Contains(exprValue, "{") &&
+				!strings.Contains(exprValue, "templ ") {
+				// Check if this is a method (has receiver)
+				if strings.Contains(exprValue, "func (") {
+					// Include methods that might implement templ.Component (e.g., Render method)
+					if strings.Contains(exprValue, "Render(") && strings.Contains(exprValue, "context.Context") {
+						includeInOverlay = true
+					} else {
+						includeInOverlay = false
+					}
+				} else {
+					// Skip regular function implementations
+					includeInOverlay = false
 				}
 			}
 
-			sb.WriteString(exprValue)
-			sb.WriteString("\n\n")
+			if includeInOverlay {
+				if strings.Contains(exprValue, "import") {
+					// This is handled above, skip
+				} else {
+					bodySection.WriteString(exprValue)
+					bodySection.WriteString("\n\n")
+				}
+			}
 		}
 	}
 
-	// Add required imports if not already present
-	if !hasImports {
-		sb.WriteString("import (\n")
-		sb.WriteString("\t\"github.com/a-h/templ\"\n")
-		sb.WriteString("\t\"context\"\n")
-		sb.WriteString("\t\"io\"\n")
-		sb.WriteString(")\n\n")
+	// Write all needed imports
+	var importList []string
+	for imp := range neededImports {
+		importList = append(importList, imp)
+	}
+	
+	// Sort imports for consistency
+	sort.Strings(importList)
+	
+	// Write import block
+	if len(importList) > 0 {
+		if len(importList) == 1 {
+			importSection.WriteString(fmt.Sprintf("import \"%s\"\n\n", importList[0]))
+		} else {
+			importSection.WriteString("import (\n")
+			for _, imp := range importList {
+				importSection.WriteString(fmt.Sprintf("\t\"%s\"\n", imp))
+			}
+			importSection.WriteString(")\n\n")
+		}
 	}
 
 	// Second pass: generate stubs for templates
 	for _, node := range tf.Nodes {
 		switch n := node.(type) {
 		case *parser.HTMLTemplate:
-			// Use the parsed AST if available, otherwise fall back to parsing
-			if _, ok := n.Expression.Stmt.(*ast.FuncDecl); !ok {
-				// Skip templates without valid function declarations
-				continue
+			// Extract just the function signature, not the entire expression
+			exprValue := strings.TrimSpace(n.Expression.Value)
+			
+			// For struct methods, extract the receiver and method signature
+			if strings.HasPrefix(exprValue, "(") {
+				// Find the closing parenthesis for the receiver
+				if idx := strings.Index(exprValue, ")"); idx != -1 {
+					// Extract up to the opening brace or end of parameters
+					methodPart := exprValue[idx+1:]
+					if braceIdx := strings.Index(methodPart, "{"); braceIdx != -1 {
+						methodPart = strings.TrimSpace(methodPart[:braceIdx])
+					} else if lastParen := strings.LastIndex(methodPart, ")"); lastParen != -1 {
+						methodPart = strings.TrimSpace(methodPart[:lastParen+1])
+					}
+					exprValue = exprValue[:idx+1] + " " + methodPart
+				}
+			} else {
+				// For regular functions, extract up to the opening brace
+				if braceIdx := strings.Index(exprValue, "{"); braceIdx != -1 {
+					exprValue = strings.TrimSpace(exprValue[:braceIdx])
+				} else if lastParen := strings.LastIndex(exprValue, ")"); lastParen != -1 {
+					exprValue = strings.TrimSpace(exprValue[:lastParen+1])
+				}
 			}
+			
+			// Debug: Button expression value
 
 			// Generate proper function signature
-			sb.WriteString("func ")
-			sb.WriteString(n.Expression.Value)
-			sb.WriteString(" templ.Component {\n")
-			sb.WriteString("\treturn templ.NopComponent\n")
-			sb.WriteString("}\n\n")
+			bodySection.WriteString("func ")
+			bodySection.WriteString(exprValue)
+			bodySection.WriteString(" templ.Component {\n")
+			bodySection.WriteString("\treturn templ.NopComponent\n")
+			bodySection.WriteString("}\n\n")
 
 		case *parser.CSSTemplate:
 			// CSS templates become functions returning templ.CSSClass
-			sb.WriteString("func ")
-			sb.WriteString(n.Name)
-			sb.WriteString("() templ.CSSClass {\n")
-			sb.WriteString("\treturn templ.ComponentCSSClass{}\n")
-			sb.WriteString("}\n\n")
+			bodySection.WriteString("func ")
+			bodySection.WriteString(n.Name)
+			bodySection.WriteString("() templ.CSSClass {\n")
+			bodySection.WriteString("\treturn templ.ComponentCSSClass{}\n")
+			bodySection.WriteString("}\n\n")
 
 		// TODO: Script templates are deprecated?
 		case *parser.ScriptTemplate:
 			// Script templates with proper signatures
-			sb.WriteString("func ")
-			sb.WriteString(n.Name.Value)
-			sb.WriteString("(")
-			sb.WriteString(n.Parameters.Value)
-			sb.WriteString(") templ.ComponentScript {\n")
-			sb.WriteString("\treturn templ.ComponentScript{}\n")
-			sb.WriteString("}\n\n")
+			bodySection.WriteString("func ")
+			bodySection.WriteString(n.Name.Value)
+			bodySection.WriteString("(")
+			bodySection.WriteString(n.Parameters.Value)
+			bodySection.WriteString(") templ.ComponentScript {\n")
+			bodySection.WriteString("\treturn templ.ComponentScript{}\n")
+			bodySection.WriteString("}\n\n")
 		}
 	}
 
-	return sb.String()
+	// Add blank assignments for standard imports to avoid unused errors
+	bodySection.WriteString("\n// Suppress unused import errors\n")
+	
+	// Add blank assignments only for imports we have
+	for _, imp := range importList {
+		switch imp {
+		case "context":
+			bodySection.WriteString("var _ = context.TODO\n")
+		case "io":
+			bodySection.WriteString("var _ = io.Discard\n")
+		case "github.com/a-h/templ":
+			bodySection.WriteString("var _ = templ.NopComponent\n")
+		}
+	}
+
+	// Combine all sections
+	sb.WriteString(importSection.String())
+	sb.WriteString(bodySection.String())
+	
+	overlayContent := sb.String()
+	
+	return overlayContent
+}
+
+// importInfo contains import path and its identifier
+type importInfo struct {
+	path       string
+	identifier string // either alias or package name
+}
+
+// extractImportsWithAliases extracts imports with their identifiers from Go code
+func extractImportsWithAliases(goCode string) []importInfo {
+	var imports []importInfo
+	
+	// Use the existing parseImportPath logic but extend it
+	fset := token.NewFileSet()
+	fullGoCode := "package main\n" + goCode
+	
+	astFile, err := goparser.ParseFile(fset, "", fullGoCode, goparser.ImportsOnly)
+	if err != nil {
+		return imports
+	}
+	
+	for _, imp := range astFile.Imports {
+		if imp.Path != nil {
+			pkgPath := strings.Trim(imp.Path.Value, `"`)
+			var identifier string
+			
+			if imp.Name != nil && imp.Name.Name != "." {
+				// Explicit alias
+				identifier = imp.Name.Name
+			} else {
+				// Default package name from path
+				parts := strings.Split(pkgPath, "/")
+				identifier = parts[len(parts)-1]
+				// Handle versioned packages like "v2"
+				if strings.HasPrefix(identifier, "v") && len(identifier) > 1 {
+					if _, err := strconv.Atoi(identifier[1:]); err == nil && len(parts) > 1 {
+						identifier = parts[len(parts)-2]
+					}
+				}
+			}
+			
+			if identifier != "" && identifier != "_" {
+				// Skip some common standard library packages that are unlikely to be unused
+				skipPackages := map[string]bool{
+					"fmt": true, "strings": true, "io": true, "os": true,
+					"context": true, "errors": true, "time": true,
+				}
+				if !skipPackages[identifier] {
+					imports = append(imports, importInfo{
+						path:       pkgPath,
+						identifier: identifier,
+					})
+				}
+			}
+		}
+	}
+	
+	return imports
 }
 
 // extractComponentSignature extracts component signature
@@ -433,6 +679,10 @@ func (r *symbolResolver) extractComponentSignature(obj types.Object, pkgPath str
 
 		for i := 0; i < params.Len(); i++ {
 			param := params.At(i)
+			// Debug
+			if obj.Name() == "Button" {
+				fmt.Printf("Debug extractComponentSignature: Button param[%d] name='%s', type='%s'\n", i, param.Name(), param.Type())
+			}
 			paramInfo = append(paramInfo, r.analyzeParameterType(param.Name(), param.Type()))
 		}
 	} else {
@@ -458,6 +708,8 @@ func (r *symbolResolver) extractComponentSignature(obj types.Object, pkgPath str
 		isPointerRecv: isPointerRecv,
 	}, nil
 }
+
+var overlayMu sync.Mutex // Protects the overlay map
 
 // registerTemplOverlay registers a template file for symbol resolution by creating a Go overlay
 // This method generates an overlay that makes the templ file available to the Go package loader
@@ -489,9 +741,89 @@ func (r *symbolResolver) registerTemplOverlay(tf *parser.TemplateFile, fileName 
 		return fmt.Errorf("no package declaration found in template file")
 	}
 
+	overlayMu.Lock()
+	defer overlayMu.Unlock()
+	
+	// Generate overlay only for this specific file
 	overlayContent := r.generateOverlay(tf, pkgName)
+	fmt.Printf("Debug: Generated overlay for %s:\n%s\n", overlayPath, overlayContent)
 	r.overlay[overlayPath] = []byte(overlayContent)
+	
+	// Clear package cache when overlay changes since cached packages won't have the new overlay
+	// This is important when processing multiple files
+	r.packageCache = make(map[string]*packages.Package)
 
+	return nil
+}
+
+// registerSingleFileWithDependencies registers overlays for a single file and its dependencies
+// This is used when processing a single file without full preprocessing
+func (r *symbolResolver) registerSingleFileWithDependencies(tf *parser.TemplateFile, fileName string) error {
+	// First register the main file
+	if err := r.registerTemplOverlay(tf, fileName); err != nil {
+		return err
+	}
+	
+	// Extract imports from the template file to find dependencies
+	dir := filepath.Dir(fileName)
+	imports := make(map[string]bool)
+	
+	// Look for imports in Go expressions
+	for _, node := range tf.Nodes {
+		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
+			if strings.Contains(goExpr.Expression.Value, "import") {
+				for _, imp := range extractImports(goExpr.Expression.Value) {
+					imports[imp] = true
+				}
+			}
+		}
+	}
+	
+	// For each import, check if it's a local package with templ files
+	// Debug: Found %d imports in %s
+	for imp := range imports {
+		// Debug: Processing import %s
+		// Skip standard library and external packages
+		if !strings.Contains(imp, "/") {
+			continue
+		}
+		
+		// Try to find the package directory
+		// This is a simplified approach - in reality we'd need to use go/build
+		// For now, handle relative imports like "./mod" and "./externmod"
+		if strings.HasPrefix(imp, "./") || strings.Contains(imp, "/mod") || strings.Contains(imp, "/externmod") {
+			var depDir string
+			if relPath, ok := strings.CutPrefix(imp, "./"); ok {
+				depDir = filepath.Join(dir, relPath)
+			} else {
+				// Try to find it relative to current directory
+				parts := strings.Split(imp, "/")
+				if len(parts) > 0 {
+					lastPart := parts[len(parts)-1]
+					depDir = filepath.Join(dir, lastPart)
+				}
+			}
+			
+			if depDir != "" {
+				// Debug: Looking for templ files in %s
+				// Look for templ files in the dependency directory
+				templFiles, _ := filepath.Glob(filepath.Join(depDir, "*.templ"))
+				// Debug: Found %d templ files in %s
+				for _, templFile := range templFiles {
+					depTf, err := parser.Parse(templFile)
+					if err != nil {
+						continue
+					}
+					// Register overlay for the dependency
+					// Debug: Registering overlay for dependency %s
+					if err := r.registerTemplOverlay(depTf, templFile); err != nil {
+						// Warning: failed to register overlay for dependency %s: %v
+					}
+				}
+			}
+		}
+	}
+	
 	return nil
 }
 
@@ -515,12 +847,44 @@ func (r *symbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*p
 		return pkg, nil
 	}
 
+	// Determine if this is an internal or external package
+	var isInternal bool
+	var useOverlay bool
+	
+	if r.depGraph != nil {
+		// If we're loading by directory, get the package path first
+		pkgPath := pattern
+		if pattern == "." {
+			// Try to determine package path from directory
+			tempPkg, err := loadPackageMinimal(fromDir)
+			if err == nil && tempPkg != nil {
+				pkgPath = tempPkg.PkgPath
+			}
+		}
+		
+		// Check if this package is internal (in our dependency tree)
+		isInternal = r.depGraph.isInternal(pkgPath)
+		useOverlay = isInternal // Only use overlay for internal packages
+	} else {
+		// No dependency graph means we're in single-file mode or preprocessing
+		// Use overlay for all packages in this case
+		useOverlay = true
+	}
+
+	overlayMu.Lock()
+	defer overlayMu.Unlock()
+
 	cfg := &packages.Config{
-		Mode: packages.NeedName |
-			packages.NeedImports |
-			packages.NeedTypes,
-		Dir:     fromDir,
-		Overlay: r.overlay,
+		Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax | packages.NeedImports,
+		Dir:  fromDir,
+	}
+	
+	// Only apply overlay for internal packages
+	if useOverlay {
+		cfg.Overlay = r.overlay
+		fmt.Printf("Debug ensurePackageLoaded: Loading %s from %s with %d overlay entries\n", pattern, fromDir, len(r.overlay))
+	} else {
+		fmt.Printf("Debug ensurePackageLoaded: Loading %s from %s without overlay\n", pattern, fromDir)
 	}
 
 	pkgs, err := packages.Load(cfg, pattern)
@@ -533,12 +897,15 @@ func (r *symbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*p
 	}
 
 	pkg := pkgs[0]
-	// Allow packages with errors if they're from _templ.go files
-	if len(pkg.Errors) > 0 {
+	fmt.Printf("Debug ensurePackageLoaded: Loaded package %s, types=%v, %d errors\n", pkg.PkgPath, pkg.Types != nil, len(pkg.Errors))
+	
+	// For internal packages, allow certain errors from overlays
+	if isInternal && len(pkg.Errors) > 0 {
 		hasNonTemplErrors := false
 		for _, err := range pkg.Errors {
 			errStr := err.Error()
-			if !strings.Contains(errStr, "_templ.go") {
+			// Allow errors from _templ.go files or unused import errors
+			if !strings.Contains(errStr, "_templ.go") && !strings.Contains(errStr, "imported and not used") && !strings.Contains(errStr, "imported as") {
 				hasNonTemplErrors = true
 				break
 			}
@@ -546,10 +913,32 @@ func (r *symbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*p
 		if hasNonTemplErrors {
 			return nil, fmt.Errorf("package has errors: %v", pkg.Errors)
 		}
+	} else if !isInternal && len(pkg.Errors) > 0 {
+		// For external packages, report all errors
+		return nil, fmt.Errorf("package has errors: %v", pkg.Errors)
 	}
 
 	r.packageCache[cacheKey] = pkg
 	return pkg, nil
+}
+
+// loadPackageMinimal loads just enough package info to get the package path
+func loadPackageMinimal(dir string) (*packages.Package, error) {
+	cfg := &packages.Config{
+		Mode: packages.NeedName,
+		Dir:  dir,
+	}
+	
+	pkgs, err := packages.Load(cfg, ".")
+	if err != nil {
+		return nil, err
+	}
+	
+	if len(pkgs) == 0 {
+		return nil, fmt.Errorf("no packages found")
+	}
+	
+	return pkgs[0], nil
 }
 
 // getLocalTemplate returns a local template signature by name
@@ -851,22 +1240,12 @@ func (r *symbolResolver) getPackagePathFromDir(dir string) (string, error) {
 		return pkg.PkgPath, nil
 	}
 
-	// Otherwise, do a minimal load just to get the package path
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedModule,
-		Dir:  dir,
-	}
-
-	pkgs, err := packages.Load(cfg, ".")
+	pkg, err := r.ensurePackageLoaded(dir, "")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to load package from directory %s: %w", dir, err)
 	}
 
-	if len(pkgs) == 0 {
-		return "", fmt.Errorf("no package found in directory %s", dir)
-	}
-
-	return pkgs[0].PkgPath, nil
+	return pkg.PkgPath, nil
 }
 
 // getTemplateName extracts the template name from an HTMLTemplate node

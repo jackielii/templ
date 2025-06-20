@@ -71,7 +71,8 @@ func enhancedMissingComponentDiagnoser(t *parser.TemplateFile) ([]parser.Diagnos
 	definedComponents := collectDefinedComponents(t)
 
 	// Create symbol resolver
-	resolver := newSymbolResolver()
+	// resolver := newSymbolResolver()
+	resolver := globalSymbolResolver
 
 	// Check each component reference
 	for _, ref := range componentRefs {
