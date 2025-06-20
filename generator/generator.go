@@ -151,7 +151,9 @@ func (g *generator) generate() (err error) {
 	g.context = NewGeneratorContext()
 	
 	// Register template file for symbol resolution
-	g.symbolResolver.Register(g.tf)
+	if err = g.symbolResolver.Register(g.tf, g.options.FileName); err != nil {
+		return err
+	}
 
 	// Components are now resolved on-demand during code generation
 
@@ -185,7 +187,18 @@ func (g *generator) generate() (err error) {
 // currentFileDir returns the directory of the current template file being processed
 func (g *generator) currentFileDir() string {
 	if g.options.FileName != "" {
-		return filepath.Dir(g.options.FileName)
+		dir := filepath.Dir(g.options.FileName)
+		// Ensure the directory is absolute for symbol resolution
+		if !filepath.IsAbs(dir) {
+			if absDir, err := filepath.Abs(dir); err == nil {
+				return absDir
+			}
+		}
+		return dir
+	}
+	// Return absolute path of current directory
+	if cwd, err := filepath.Abs("."); err == nil {
+		return cwd
 	}
 	return "."
 }
@@ -1734,7 +1747,7 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 	// In this block, we want to support { child } expression for templ.Component variables.
 	// Try to resolve the expression using context
 	exprValue := strings.TrimSpace(e.Value)
-	typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, *g.context)
+	typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, *g.context, g.currentFileDir())
 	if err == nil && typeInfo.IsComponent {
 		// This is a component, use call template expression logic
 		return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})

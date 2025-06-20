@@ -142,6 +142,13 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 	if len(params) > 0 && params[len(params)-1].IsAttributer {
 		attrParam = params[len(params)-1]
 		params = params[:len(params)-1]
+	} else if len(params) > 0 {
+		// Debug: log why the last parameter wasn't identified as Attributer
+		lastParam := params[len(params)-1]
+		if lastParam.Name == "attrs" {
+			return elementComponentAttributes{}, fmt.Errorf("parameter '%s' has type '%s' but IsAttributer=%v for component %s", 
+				lastParam.Name, lastParam.Type, lastParam.IsAttributer, n.Name)
+		}
 	}
 	ordered := make([]parser.Attribute, len(params))
 	keys := make([]parser.ConstantAttributeKey, len(params))
@@ -149,7 +156,12 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 		var ok bool
 		ordered[i], ok = attrMap[param.Name]
 		if !ok {
-			return elementComponentAttributes{}, fmt.Errorf("missing required attribute %s for component %s", param.Name, n.Name)
+			// Debug: log what we're looking for and what we have
+			available := make([]string, 0, len(attrMap))
+			for k := range attrMap {
+				available = append(available, k)
+			}
+			return elementComponentAttributes{}, fmt.Errorf("missing required attribute %s for component %s (available: %v)", param.Name, n.Name, available)
 		}
 		keys[i], ok = keyMap[param.Name]
 		if !ok {
@@ -157,7 +169,7 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 		}
 	}
 	return elementComponentAttributes{
-		params:    sig.Parameters,
+		params:    params,  // Use params without the attrs parameter
 		attrs:     ordered,
 		keys:      keys,
 		restAttrs: rest,
@@ -175,7 +187,7 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 		exprValue := strings.TrimSpace(attr.Expression.Value)
 		
 		// Try to resolve the expression type using context
-		typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, *g.context)
+		typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, *g.context, g.currentFileDir())
 		if err == nil && typeInfo.IsComponent {
 			// We know for sure it's a component, pass it directly
 			return exprValue, nil

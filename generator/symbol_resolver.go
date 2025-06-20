@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/a-h/templ/cmd/templ/generatecmd/modcheck"
 	"github.com/a-h/templ/parser/v2"
 	"golang.org/x/tools/go/packages"
 )
@@ -28,14 +27,14 @@ type ComponentSignature struct {
 // ParameterInfo represents a function parameter or struct field with rich type information
 type ParameterInfo struct {
 	Name         string
-	Type         string     // String representation for display/debugging
-	IsComponent  bool       // Pre-computed: implements templ.Component interface
-	IsAttributer bool       // Pre-computed: implements templ.Attributer interface
-	IsPointer    bool       // Pre-computed: is a pointer type
-	IsSlice      bool       // Pre-computed: is a slice type
-	IsMap        bool       // Pre-computed: is a map type
-	IsString     bool       // Pre-computed: is string type
-	IsBool       bool       // Pre-computed: is bool type
+	Type         string // String representation for display/debugging
+	IsComponent  bool   // Pre-computed: implements templ.Component interface
+	IsAttributer bool   // Pre-computed: implements templ.Attributer interface
+	IsPointer    bool   // Pre-computed: is a pointer type
+	IsSlice      bool   // Pre-computed: is a slice type
+	IsMap        bool   // Pre-computed: is a map type
+	IsString     bool   // Pre-computed: is string type
+	IsBool       bool   // Pre-computed: is bool type
 }
 
 // ComponentResolutionError represents an error during component resolution with position information
@@ -58,31 +57,31 @@ type TypeInfo struct {
 	Package      string // e.g., "github.com/a-h/templ"
 	IsInterface  bool
 	IsPointer    bool
-	IsComponent  bool   // Pre-computed: implements templ.Component
-	IsAttributer bool   // Pre-computed: implements templ.Attributer
-	IsError      bool   // Pre-computed: is error type
-	IsString     bool   // Pre-computed: is string type
-	IsBool       bool   // Pre-computed: is bool type
-	IsSlice      bool   // Pre-computed: is slice type
-	IsMap        bool   // Pre-computed: is map type
+	IsComponent  bool // Pre-computed: implements templ.Component
+	IsAttributer bool // Pre-computed: implements templ.Attributer
+	IsError      bool // Pre-computed: is error type
+	IsString     bool // Pre-computed: is string type
+	IsBool       bool // Pre-computed: is bool type
+	IsSlice      bool // Pre-computed: is slice type
+	IsMap        bool // Pre-computed: is map type
 }
 
 // SymbolResolver automatically detects module roots and provides unified resolution
 // for both templ templates and Go components across packages
 type SymbolResolver struct {
-	signatures     map[string]ComponentSignature // Cache keyed by fully qualified names
-	overlay        map[string][]byte             // Go file overlays for templ templates
-	localTemplates map[string]ComponentSignature // Local template signatures
-	cachedPackage  *packages.Package             // Lazily loaded package with full type info
-	currentFile    string                        // Current file being processed
+	signatures      map[string]ComponentSignature // Cache keyed by fully qualified names
+	overlay         map[string][]byte             // Go file overlays for templ templates
+	packageCache    map[string]*packages.Package  // Cache of loaded packages by directory
+	currentPackage  *packages.Package             // Current package being processed
+	currentPkgPath  string                        // Current package path
 }
 
 // newSymbolResolver creates a new symbol resolver
 func newSymbolResolver() SymbolResolver {
 	return SymbolResolver{
-		signatures:     make(map[string]ComponentSignature),
-		overlay:        make(map[string][]byte),
-		localTemplates: make(map[string]ComponentSignature),
+		signatures:    make(map[string]ComponentSignature),
+		overlay:       make(map[string][]byte),
+		packageCache:  make(map[string]*packages.Package),
 	}
 }
 
@@ -93,7 +92,7 @@ func (r *SymbolResolver) ResolveElementComponent(fromDir, currentPkg string, com
 	if sig, ok := r.signatures[componentName]; ok {
 		return sig, nil
 	}
-	
+
 	// Parse component name to determine resolution strategy
 	var packagePath, localName string
 	if strings.Contains(componentName, ".") {
@@ -102,7 +101,7 @@ func (r *SymbolResolver) ResolveElementComponent(fromDir, currentPkg string, com
 			// Check if first part is an import alias
 			importPath := r.resolveImportAlias(parts[0], tf)
 			if importPath != "" {
-				// Cross-package component: alias.Component  
+				// Cross-package component: alias.Component
 				packagePath = importPath
 				localName = parts[1]
 			} else {
@@ -117,10 +116,10 @@ func (r *SymbolResolver) ResolveElementComponent(fromDir, currentPkg string, com
 		// Simple name - definitely local
 		localName = componentName
 	}
-	
+
 	var sig ComponentSignature
 	var err error
-	
+
 	if packagePath != "" {
 		// Cross-package resolution
 		sig, err = r.ResolveComponentFrom(fromDir, packagePath, localName)
@@ -128,15 +127,15 @@ func (r *SymbolResolver) ResolveElementComponent(fromDir, currentPkg string, com
 		// Local resolution - try multiple strategies
 		sig, err = r.resolveLocalComponent(fromDir, currentPkg, localName, tf)
 	}
-	
+
 	if err != nil {
 		return ComponentSignature{}, err
 	}
-	
+
 	// Cache with original component name for future lookups
 	sig.QualifiedName = componentName
 	r.signatures[componentName] = sig
-	
+
 	return sig, nil
 }
 
@@ -159,7 +158,7 @@ func (r *SymbolResolver) parseImportPath(goCode, packageAlias string) string {
 	// Try to parse as a complete Go file first
 	fullGoCode := "package main\n" + goCode
 	fset := token.NewFileSet()
-	
+
 	astFile, err := goparser.ParseFile(fset, "", fullGoCode, goparser.ImportsOnly)
 	if err != nil {
 		// If that fails, try parsing just the import block
@@ -204,33 +203,36 @@ func (r *SymbolResolver) parseImportPath(goCode, packageAlias string) string {
 	return ""
 }
 
-// resolveLocalComponent resolves a local component using multiple strategies
+// resolveLocalComponent resolves a local component using package loading
 func (r *SymbolResolver) resolveLocalComponent(fromDir, currentPkg, componentName string, tf *parser.TemplateFile) (ComponentSignature, error) {
-	// Strategy 1: Check already extracted local templates
-	if sig, ok := r.GetLocalTemplate(componentName); ok {
+	// For dotted names, check if it's a struct method first
+	if strings.Contains(componentName, ".") {
+		if sig, ok := r.resolveStructMethod(componentName, tf, fromDir); ok {
+			return sig, nil
+		}
+	}
+	
+	// Use package resolution with overlays
+	if currentPkg == "" {
+		// Try to determine current package from directory
+		var err error
+		currentPkg, err = r.getPackagePathFromDir(fromDir)
+		if err != nil {
+			return ComponentSignature{}, fmt.Errorf("failed to determine package path: %w", err)
+		}
+	}
+	
+	// Debug: fmt.Printf("DEBUG resolveLocalComponent: fromDir=%s, currentPkg=%s, componentName=%s\n", fromDir, currentPkg, componentName)
+	sig, err := r.ResolveComponentFrom(fromDir, currentPkg, componentName)
+	if err == nil {
 		return sig, nil
 	}
 	
-	// Strategy 2: If dotted name, try struct variable method resolution
-	if strings.Contains(componentName, ".") {
-		if sig, ok := r.resolveStructMethod(componentName, tf); ok {
-			return sig, nil
-		}
-	}
-	
-	// Strategy 3: Try current package resolution with go/packages
-	if currentPkg != "" {
-		sig, err := r.ResolveComponentFrom(fromDir, currentPkg, componentName)
-		if err == nil {
-			return sig, nil
-		}
-	}
-	
-	return ComponentSignature{}, fmt.Errorf("component %s not found", componentName)
+	return ComponentSignature{}, fmt.Errorf("component %s not found: %w", componentName, err)
 }
 
 // resolveStructMethod resolves struct variable method components like structVar.Method
-func (r *SymbolResolver) resolveStructMethod(componentName string, tf *parser.TemplateFile) (ComponentSignature, bool) {
+func (r *SymbolResolver) resolveStructMethod(componentName string, tf *parser.TemplateFile, fromDir string) (ComponentSignature, bool) {
 	parts := strings.Split(componentName, ".")
 	if len(parts) < 2 {
 		return ComponentSignature{}, false
@@ -239,23 +241,47 @@ func (r *SymbolResolver) resolveStructMethod(componentName string, tf *parser.Te
 	varName := parts[0]
 	methodName := strings.Join(parts[1:], ".")
 	
-	// Look through template file for variable declarations  
-	for _, node := range tf.Nodes {
-		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
-			if typeName := r.extractVariableType(goExpr.Expression.Value, varName); typeName != "" {
-				// Look for signature with TypeName.MethodName
-				candidateSig := typeName + "." + methodName
-				if sig, ok := r.GetLocalTemplate(candidateSig); ok {
-					// Create alias for future lookups
-					sig.QualifiedName = componentName
-					r.signatures[componentName] = sig
-					return sig, true
-				}
-			}
-		}
+	// Ensure package is loaded with overlays
+	pkg, err := r.ensurePackageLoaded(fromDir)
+	if err != nil {
+		return ComponentSignature{}, false
 	}
 	
-	return ComponentSignature{}, false
+	// Look for the variable in the package scope
+	obj := pkg.Types.Scope().Lookup(varName)
+	if obj == nil {
+		return ComponentSignature{}, false
+	}
+	
+	// Get the type of the variable
+	varType := obj.Type()
+	
+	// If it's a pointer, get the element type
+	if ptr, ok := varType.(*types.Pointer); ok {
+		varType = ptr.Elem()
+	}
+	
+	// Check if it's a named type
+	if _, ok := varType.(*types.Named); !ok {
+		return ComponentSignature{}, false
+	}
+	
+	// Look for the method
+	methodObj, _, _ := types.LookupFieldOrMethod(varType, true, pkg.Types, methodName)
+	if methodObj == nil {
+		return ComponentSignature{}, false
+	}
+	
+	// Extract signature
+	sig, err := r.extractComponentSignature(methodObj, pkg.PkgPath, parser.Position{}, "")
+	if err != nil {
+		return ComponentSignature{}, false
+	}
+	
+	// Create alias for future lookups
+	sig.QualifiedName = componentName
+	r.signatures[componentName] = sig
+	return sig, true
 }
 
 // extractVariableType extracts the type from a variable declaration using AST parsing
@@ -268,7 +294,7 @@ func (r *SymbolResolver) extractVariableType(goCode, varName string) string {
 		// Fallback to simple string parsing
 		return r.extractVariableTypeSimple(goCode, varName)
 	}
-	
+
 	// Look for variable declarations in AST
 	for _, decl := range node.Decls {
 		if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.VAR {
@@ -283,7 +309,7 @@ func (r *SymbolResolver) extractVariableType(goCode, varName string) string {
 			}
 		}
 	}
-	
+
 	return ""
 }
 
@@ -325,6 +351,8 @@ func (r *SymbolResolver) ResolveComponentFrom(fromDir, pkgPath, componentName st
 
 // ResolveComponentWithPosition resolves a component with position information for error reporting
 func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componentName string, pos parser.Position, fileName string) (ComponentSignature, error) {
+	// Debug: fmt.Printf("DEBUG ResolveComponentWithPosition: fromDir=%s, pkgPath=%s, componentName=%s\n", fromDir, pkgPath, componentName)
+	
 	// Generate fully qualified name as cache key
 	var qualifiedName string
 	if pkgPath == "" {
@@ -333,7 +361,7 @@ func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componen
 	} else {
 		qualifiedName = pkgPath + "." + componentName
 	}
-	
+
 	// Check cache first if we have a qualified name
 	if qualifiedName != "" {
 		if sig, ok := r.signatures[qualifiedName]; ok {
@@ -341,30 +369,24 @@ func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componen
 		}
 	}
 
-	// Find the module root for the directory we're starting from
-	moduleRoot, err := modcheck.WalkUp(fromDir)
-	if err != nil {
-		baseErr := fmt.Errorf("failed to find module root from %s: %w", fromDir, err)
-		if fileName != "" {
-			return ComponentSignature{}, ComponentResolutionError{Err: baseErr, Position: pos, FileName: fileName}
+	// For cross-package components, we need to load from the target package directory
+	loadDir := fromDir
+	if pkgPath != "" && !strings.HasPrefix(pkgPath, ".") {
+		// This is a cross-package import, we need to find the directory for this package
+		// For now, use packages.Load to find the directory
+		cfg := &packages.Config{
+			Mode: packages.NeedFiles,
+			Dir:  fromDir,
 		}
-		return ComponentSignature{}, baseErr
+		pkgs, err := packages.Load(cfg, pkgPath)
+		if err == nil && len(pkgs) > 0 && len(pkgs[0].GoFiles) > 0 {
+			loadDir = filepath.Dir(pkgs[0].GoFiles[0])
+			// Debug: fmt.Printf("DEBUG: Cross-package load - pkgPath=%s, loadDir=%s\n", pkgPath, loadDir)
+		}
 	}
-
-	// Load the package with full type information
-	cfg := &packages.Config{
-		Mode: packages.NeedName |
-			packages.NeedFiles |
-			packages.NeedCompiledGoFiles |
-			packages.NeedImports |
-			packages.NeedTypes |
-			packages.NeedSyntax |
-			packages.NeedTypesInfo |
-			packages.NeedModule,
-		Dir: moduleRoot, // Use the detected module root
-	}
-
-	pkgs, err := packages.Load(cfg, pkgPath)
+	
+	// Use ensurePackageLoaded which properly handles overlays
+	pkg, err := r.ensurePackageLoaded(loadDir)
 	if err != nil {
 		baseErr := fmt.Errorf("failed to load package %s: %w", pkgPath, err)
 		if fileName != "" {
@@ -372,16 +394,6 @@ func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componen
 		}
 		return ComponentSignature{}, baseErr
 	}
-
-	if len(pkgs) == 0 {
-		baseErr := fmt.Errorf("package %s not found", pkgPath)
-		if fileName != "" {
-			return ComponentSignature{}, ComponentResolutionError{Err: baseErr, Position: pos, FileName: fileName}
-		}
-		return ComponentSignature{}, baseErr
-	}
-
-	pkg := pkgs[0]
 	// Allow packages with errors if they're compilation errors from generated files
 	if len(pkg.Errors) > 0 {
 		// Check if errors are from _templ.go files - if so, we can ignore them
@@ -409,6 +421,16 @@ func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componen
 			return ComponentSignature{}, ComponentResolutionError{Err: baseErr, Position: pos, FileName: fileName}
 		}
 		return ComponentSignature{}, baseErr
+	}
+	
+	// Debug: Check if we have any compilation errors that might affect type resolution
+	if len(pkg.Errors) > 0 {
+		// Log the first few errors for debugging
+		for i := range pkg.Errors {
+			if i < 3 {
+				// fmt.Printf("DEBUG: Package error %d: %v\n", i, pkg.Errors[i])
+			}
+		}
 	}
 
 	obj := pkg.Types.Scope().Lookup(componentName)
@@ -451,56 +473,77 @@ func (r *SymbolResolver) ResolveComponent(pkgPath, componentName string) (Compon
 
 // processTemplFiles finds and parses .templ files in the package directory,
 // generating Go stub overlays for each templ template
-func (r *SymbolResolver) processTemplFiles(pkgDir, pkgName string) error {
-	templFiles, err := filepath.Glob(filepath.Join(pkgDir, "*.templ"))
-	if err != nil {
-		return fmt.Errorf("failed to find templ files in %s: %w", pkgDir, err)
-	}
-
-	for _, templFile := range templFiles {
-		content, err := os.ReadFile(templFile)
-		if err != nil {
-			// Skip files we can't read, but log the error
-			continue
-		}
-
-		tf, err := parser.ParseString(string(content))
-		if err != nil {
-			// Skip files that fail to parse, but log the error
-			continue
-		}
-
-		// Generate overlay path and content
-		overlayPath := strings.TrimSuffix(templFile, ".templ") + "_templ_overlay.go"
-		overlayContent := r.generateOverlay(tf, pkgName)
-		r.overlay[overlayPath] = []byte(overlayContent)
-	}
-
-	return nil
-}
 
 // generateOverlay creates Go stub code for templ templates
 func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string) string {
 	var sb strings.Builder
-
+	
 	sb.WriteString(fmt.Sprintf("package %s\n\n", pkgName))
-	sb.WriteString("import (\n")
-	sb.WriteString("\t\"github.com/a-h/templ\"\n")
-	sb.WriteString("\t\"context\"\n")
-	sb.WriteString("\t\"io\"\n")
-	sb.WriteString(")\n\n")
-
-	// Generate function stubs for each templ template
+	
+	// First pass: collect imports and write top-level Go code
+	hasImports := false
 	for _, node := range tf.Nodes {
-		if tmpl, ok := node.(*parser.HTMLTemplate); ok {
+		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
+			// This includes imports, type definitions, variables, etc.
+			sb.WriteString(goExpr.Expression.Value)
+			sb.WriteString("\n\n")
+			if strings.Contains(goExpr.Expression.Value, "import") {
+				hasImports = true
+			}
+		}
+	}
+	
+	// Add required imports if not already present
+	if !hasImports {
+		sb.WriteString("import (\n")
+		sb.WriteString("\t\"github.com/a-h/templ\"\n")
+		sb.WriteString("\t\"context\"\n")
+		sb.WriteString("\t\"io\"\n")
+		sb.WriteString(")\n\n")
+	}
+	
+	// Second pass: generate stubs for templates
+	for _, node := range tf.Nodes {
+		switch n := node.(type) {
+		case *parser.HTMLTemplate:
+			// Parse the template signature to extract name and parameters
+			name, _, err := r.parseTemplateSignatureFromAST(n.Expression.Value)
+			if err != nil || name == "" {
+				// Fallback: try to extract just the name
+				parts := strings.Fields(n.Expression.Value)
+				if len(parts) > 0 {
+					name = strings.TrimSuffix(parts[0], "(")
+				}
+			}
+			_ = name // Name extracted for potential future use
+			
+			// Generate proper function signature
 			sb.WriteString("func ")
-			sb.WriteString(tmpl.Expression.Value)
+			sb.WriteString(n.Expression.Value)
 			sb.WriteString(" templ.Component {\n")
-			sb.WriteString("\treturn nil\n")
+			sb.WriteString("\treturn templ.ComponentFunc(func(ctx context.Context, w io.Writer) error { return nil })\n")
+			sb.WriteString("}\n\n")
+			
+		case *parser.CSSTemplate:
+			// CSS templates become functions returning templ.CSSClass
+			sb.WriteString("func ")
+			sb.WriteString(n.Name)
+			sb.WriteString("() templ.CSSClass {\n")
+			sb.WriteString("\treturn templ.ComponentCSSClass{}\n")
+			sb.WriteString("}\n\n")
+			
+		case *parser.ScriptTemplate:
+			// Script templates with proper signatures
+			sb.WriteString("func ")
+			sb.WriteString(n.Name.Value)
+			sb.WriteString("(")
+			sb.WriteString(n.Parameters.Value)
+			sb.WriteString(") templ.ComponentScript {\n")
+			sb.WriteString("\treturn templ.ComponentScript{}\n")
 			sb.WriteString("}\n\n")
 		}
 	}
-
+	
 	return sb.String()
 }
 
@@ -528,7 +571,7 @@ func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath str
 			}
 			return ComponentSignature{}, baseErr
 		}
-		
+
 		isStruct, isPointerRecv = r.implementsComponent(typeName.Type(), typeName.Pkg())
 		if !isStruct {
 			baseErr := fmt.Errorf("%s does not implement templ.Component interface", obj.Name())
@@ -537,7 +580,7 @@ func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath str
 			}
 			return ComponentSignature{}, baseErr
 		}
-		
+
 		// Extract struct fields for struct components
 		paramInfo = r.extractStructFieldsWithTypeAnalysis(typeName.Type())
 	}
@@ -598,77 +641,155 @@ func (r *SymbolResolver) extractTypeSignature(tn *types.TypeName, pkgPath string
 
 // ExtractSignatures walks through a templ file and extracts all template signatures
 // Register registers a template file for potential symbol resolution
-// This method replaces ExtractSignatures and uses lazy loading
-func (r *SymbolResolver) Register(tf *parser.TemplateFile) {
-	// Extract local template signatures (cheap operation)
-	for _, node := range tf.Nodes {
-		if tmpl, ok := node.(*parser.HTMLTemplate); ok {
-			sig := r.extractLocalTemplateSignature(tmpl)
-			r.localTemplates[sig.Name] = sig
+// This method generates an overlay that makes the templ file the single source of truth
+func (r *SymbolResolver) Register(tf *parser.TemplateFile, fileName string) error {
+	// Extract package name from the template file
+	pkgName := ""
+	if tf.Package.Expression.Value != "" {
+		pkgName = strings.TrimPrefix(tf.Package.Expression.Value, "package ")
+		pkgName = strings.TrimSpace(pkgName)
+	}
+	
+	if pkgName == "" {
+		return fmt.Errorf("no package declaration found in template file")
+	}
+	
+	// Generate overlay with the same name as the output file
+	// Ensure fileName is absolute first
+	absFileName := fileName
+	if !filepath.IsAbs(fileName) {
+		var err error
+		absFileName, err = filepath.Abs(fileName)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path: %w", err)
 		}
 	}
+	overlayPath := strings.TrimSuffix(absFileName, ".templ") + "_templ.go"
 	
-	// TODO: Generate overlay (in-memory Go code) for lazy loading
-	// For now, we'll rely on the existing template signatures
-}
-
-// ensurePackageLoaded lazily loads the package with full type information
-func (r *SymbolResolver) ensurePackageLoaded(fromDir string) error {
-	if r.cachedPackage != nil {
-		return nil // Already loaded
-	}
+	overlayContent := r.generateOverlay(tf, pkgName)
+	r.overlay[overlayPath] = []byte(overlayContent)
 	
-	cfg := &packages.Config{
-		Mode: packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax | packages.NeedTypesInfo,
-		Dir:  fromDir,
-		Overlay: r.overlay,
-	}
+	// Debug: log what we're adding to overlay
+	// Debug: fmt.Printf("DEBUG Register: fileName=%s, overlayPath=%s\n", fileName, overlayPath)
 	
-	pkgs, err := packages.Load(cfg, ".")
-	if err != nil {
-		return fmt.Errorf("failed to load package: %w", err)
-	}
-	
-	if len(pkgs) == 0 {
-		return fmt.Errorf("no packages found")
-	}
-	
-	r.cachedPackage = pkgs[0]
 	return nil
 }
 
-// extractLocalTemplateSignature extracts signature from a template node
-func (r *SymbolResolver) extractLocalTemplateSignature(tmpl *parser.HTMLTemplate) ComponentSignature {
-	sig := ComponentSignature{
-		Name: getTemplateName(tmpl),
+// processTemplFiles finds and processes all templ files in a directory
+func (r *SymbolResolver) processTemplFiles(dir string) error {
+	// Find all .templ files in the directory
+	templFiles, err := filepath.Glob(filepath.Join(dir, "*.templ"))
+	if err != nil {
+		return err
 	}
 	
-	// Parse parameters from the expression
-	params := extractTemplateParams(tmpl.Expression)
-	sig.Parameters = make([]ParameterInfo, len(params))
-	
-	for i, p := range params {
-		sig.Parameters[i] = ParameterInfo{
-			Name: p.Name,
-			Type: p.Type,
+	for _, templFile := range templFiles {
+		// Skip if we already have an overlay for this file
+		overlayPath := strings.TrimSuffix(templFile, ".templ") + "_templ.go"
+		if _, exists := r.overlay[overlayPath]; exists {
+			continue
 		}
-		// Analyze parameter type
-		r.analyzeParameterTypeString(&sig.Parameters[i])
+		
+		// Parse the templ file
+		content, err := os.ReadFile(templFile)
+		if err != nil {
+			continue // Skip files we can't read
+		}
+		
+		tf, err := parser.ParseString(string(content))
+		if err != nil {
+			continue // Skip files we can't parse
+		}
+		
+		// Register the file to create overlay
+		if err := r.Register(tf, templFile); err != nil {
+			continue // Skip files we can't register
+		}
 	}
 	
-	return sig
+	return nil
 }
 
-// GetLocalTemplate returns a local template signature by name  
+// ensurePackageLoaded lazily loads the package with full type information
+func (r *SymbolResolver) ensurePackageLoaded(fromDir string) (*packages.Package, error) {
+	// Check cache first
+	if pkg, ok := r.packageCache[fromDir]; ok {
+		return pkg, nil
+	}
+	
+	// First, process all templ files in this directory to generate overlays
+	if err := r.processTemplFiles(fromDir); err != nil {
+		// Don't fail if we can't process templ files, just log it
+		// The package might still be loadable without them
+	}
+	
+	cfg := &packages.Config{
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedTypes |
+			packages.NeedSyntax |
+			packages.NeedTypesInfo |
+			packages.NeedModule,
+		Dir:     fromDir,
+		Overlay: r.overlay,
+	}
+	
+	// Debug: fmt.Printf("DEBUG ensurePackageLoaded: fromDir=%s, overlay keys:\n", fromDir)
+	// for k := range r.overlay {
+	// 	fmt.Printf("  - %s\n", k)
+	// }
+	
+	// Process templ files in the package directory to generate overlays
+	// This ensures we have stubs for all templates in the package
+	// Debug: fmt.Printf("DEBUG: calling processTemplFiles for dir: %s\n", fromDir)
+	if err := r.processTemplFiles(fromDir); err != nil {
+		// Log error but don't fail - we can still try to load the package
+		// Debug: fmt.Printf("DEBUG: processTemplFiles error: %v\n", err)
+	}
+	
+	// Debug: fmt.Printf("DEBUG ensurePackageLoaded AFTER processTemplFiles: overlay keys:\n")
+	// for k := range r.overlay {
+	// 	fmt.Printf("  - %s\n", k)
+	// }
+	
+	pkgs, err := packages.Load(cfg, ".")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load package: %w", err)
+	}
+	
+	if len(pkgs) == 0 {
+		return nil, fmt.Errorf("no packages found")
+	}
+	
+	pkg := pkgs[0]
+	// Allow packages with errors if they're from _templ.go files
+	if len(pkg.Errors) > 0 {
+		hasNonTemplErrors := false
+		for _, err := range pkg.Errors {
+			errStr := err.Error()
+			if !strings.Contains(errStr, "_templ.go") {
+				hasNonTemplErrors = true
+				break
+			}
+		}
+		if hasNonTemplErrors {
+			return nil, fmt.Errorf("package has errors: %v", pkg.Errors)
+		}
+	}
+	
+	r.packageCache[fromDir] = pkg
+	return pkg, nil
+}
+
+
+// GetLocalTemplate returns a local template signature by name
 // This method is for backward compatibility - prefer using fully qualified names
 func (r *SymbolResolver) GetLocalTemplate(name string) (ComponentSignature, bool) {
-	// First check local templates
-	if sig, ok := r.localTemplates[name]; ok {
-		return sig, true
-	}
-	// Then check signatures cache
+	// Check signatures cache
 	for qualifiedName, sig := range r.signatures {
-		if strings.HasSuffix(qualifiedName, "."+name) {
+		if strings.HasSuffix(qualifiedName, "."+name) || qualifiedName == name {
 			return sig, true
 		}
 	}
@@ -706,39 +827,68 @@ func (r *SymbolResolver) GetAllLocalTemplateNames() []string {
 }
 
 // ResolveExpression resolves an expression with context awareness
-func (r *SymbolResolver) ResolveExpression(expr string, ctx GeneratorContext) (*TypeInfo, error) {
+func (r *SymbolResolver) ResolveExpression(expr string, ctx GeneratorContext, fromDir string) (*TypeInfo, error) {
 	expr = strings.TrimSpace(expr)
 	
-	// First check template parameters if we're in a template
-	if ctx.CurrentTemplate != nil {
-		tmplName := getTemplateName(ctx.CurrentTemplate)
-		if sig, ok := r.localTemplates[tmplName]; ok {
-			for _, param := range sig.Parameters {
-				if param.Name == expr {
-					return &TypeInfo{
-						FullType:     param.Type,
-						IsComponent:  param.IsComponent,
-						IsAttributer: param.IsAttributer,
-						IsPointer:    param.IsPointer,
-						IsSlice:      param.IsSlice,
-						IsMap:        param.IsMap,
-						IsString:     param.IsString,
-						IsBool:       param.IsBool,
-					}, nil
-				}
-			}
-		}
-	}
-	
-	// Then check local scopes (for loops, if statements, etc.)
+	// First check local scopes (for loops, if statements, etc.)
 	for i := len(ctx.LocalScopes) - 1; i >= 0; i-- {
 		if typeInfo, ok := ctx.LocalScopes[i].Variables[expr]; ok {
 			return typeInfo, nil
 		}
 	}
 	
-	// For now, return an error if not found
-	// TODO: Implement package-level symbol resolution with lazy loading
+	// Then check template parameters if we're in a template
+	if ctx.CurrentTemplate != nil {
+		// Load the current package to get proper type info
+		pkg, err := r.ensurePackageLoaded(fromDir)
+		if err == nil {
+			tmplName := getTemplateName(ctx.CurrentTemplate)
+			// Look up the template function in the package
+			obj := pkg.Types.Scope().Lookup(tmplName)
+			if obj != nil {
+				if fn, ok := obj.(*types.Func); ok {
+					sig := fn.Type().(*types.Signature)
+					params := sig.Params()
+					for i := 0; i < params.Len(); i++ {
+						param := params.At(i)
+						if param.Name() == expr {
+							paramInfo := r.analyzeParameterType(param.Name(), param.Type())
+							return &TypeInfo{
+								FullType:     paramInfo.Type,
+								IsComponent:  paramInfo.IsComponent,
+								IsAttributer: paramInfo.IsAttributer,
+								IsPointer:    paramInfo.IsPointer,
+								IsSlice:      paramInfo.IsSlice,
+								IsMap:        paramInfo.IsMap,
+								IsString:     paramInfo.IsString,
+								IsBool:       paramInfo.IsBool,
+							}, nil
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Try package-level symbol resolution
+	pkg, err := r.ensurePackageLoaded(fromDir)
+	if err == nil {
+		obj := pkg.Types.Scope().Lookup(expr)
+		if obj != nil {
+			typeInfo := r.analyzeParameterType(obj.Name(), obj.Type())
+			return &TypeInfo{
+				FullType:     typeInfo.Type,
+				IsComponent:  typeInfo.IsComponent,
+				IsAttributer: typeInfo.IsAttributer,
+				IsPointer:    typeInfo.IsPointer,
+				IsSlice:      typeInfo.IsSlice,
+				IsMap:        typeInfo.IsMap,
+				IsString:     typeInfo.IsString,
+				IsBool:       typeInfo.IsBool,
+			}, nil
+		}
+	}
+	
 	return nil, fmt.Errorf("symbol %s not found in current context", expr)
 }
 
@@ -835,7 +985,7 @@ func (r *SymbolResolver) extractParametersFromAST(fieldList *ast.FieldList) []Pa
 
 	for _, field := range fieldList.List {
 		fieldType := r.astTypeToString(field.Type)
-		
+
 		// Analyze type characteristics from AST
 		typeInfo := r.analyzeASTType(fieldType, field.Type)
 
@@ -861,7 +1011,7 @@ func (r *SymbolResolver) extractParametersFromAST(fieldList *ast.FieldList) []Pa
 func (r *SymbolResolver) analyzeASTType(typeStr string, expr ast.Expr) ParameterInfo {
 	// For templ templates, we do basic analysis based on AST structure
 	// This is less comprehensive than full type resolution but sufficient for templates
-	
+
 	isComponent := (typeStr == "templ.Component" || typeStr == "github.com/a-h/templ.Component")
 	isAttributer := (typeStr == "templ.Attributer" || typeStr == "github.com/a-h/templ.Attributer")
 	isPointer := false
@@ -869,7 +1019,7 @@ func (r *SymbolResolver) analyzeASTType(typeStr string, expr ast.Expr) Parameter
 	isMap := false
 	isString := false
 	isBool := false
-	
+
 	// Analyze AST structure
 	switch t := expr.(type) {
 	case *ast.Ident:
@@ -898,7 +1048,7 @@ func (r *SymbolResolver) analyzeASTType(typeStr string, expr ast.Expr) Parameter
 			isAttributer = true
 		}
 	}
-	
+
 	return ParameterInfo{
 		Name:         "", // Will be set by caller
 		Type:         typeStr,
@@ -1071,7 +1221,7 @@ func (r *SymbolResolver) implementsComponent(t types.Type, pkg *types.Package) (
 // analyzeParameterType performs comprehensive type analysis for a parameter
 func (r *SymbolResolver) analyzeParameterType(name string, t types.Type) ParameterInfo {
 	typeStr := t.String()
-	
+
 	// Analyze the type for various characteristics
 	isComponent := r.implementsComponentInterface(t)
 	isAttributer := r.implementsAttributerInterface(t)
@@ -1080,7 +1230,7 @@ func (r *SymbolResolver) analyzeParameterType(name string, t types.Type) Paramet
 	isMap := false
 	isString := false
 	isBool := false
-	
+
 	// Check underlying type characteristics
 	switch underlying := t.Underlying().(type) {
 	case *types.Pointer:
@@ -1101,13 +1251,19 @@ func (r *SymbolResolver) analyzeParameterType(name string, t types.Type) Paramet
 		isString = underlying.Kind() == types.String
 		isBool = underlying.Kind() == types.Bool
 	}
-	
+
 	// Also check named types (e.g., type MyString string)
 	if named, ok := t.(*types.Named); ok {
 		if basic, ok := named.Underlying().(*types.Basic); ok {
 			isString = basic.Kind() == types.String
 			isBool = basic.Kind() == types.Bool
 		}
+	}
+
+	// Fallback: If we have an invalid type but the parameter is named "attrs",
+	// assume it's a templ.Attributer (common pattern in templ)
+	if typeStr == "invalid type" && name == "attrs" {
+		isAttributer = true
 	}
 	
 	return ParameterInfo{
@@ -1130,14 +1286,14 @@ func (r *SymbolResolver) implementsComponentInterface(t types.Type) bool {
 	if method == nil {
 		return false
 	}
-	
+
 	fn, ok := method.(*types.Func)
 	if !ok {
 		return false
 	}
-	
+
 	sig := fn.Type().(*types.Signature)
-	
+
 	// Check parameters: (context.Context, io.Writer)
 	params := sig.Params()
 	if params.Len() != 2 {
@@ -1149,7 +1305,7 @@ func (r *SymbolResolver) implementsComponentInterface(t types.Type) bool {
 	if params.At(1).Type().String() != "io.Writer" {
 		return false
 	}
-	
+
 	// Check return type: error
 	results := sig.Results()
 	if results.Len() != 1 {
@@ -1158,7 +1314,7 @@ func (r *SymbolResolver) implementsComponentInterface(t types.Type) bool {
 	if results.At(0).Type().String() != "error" {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -1202,23 +1358,84 @@ func getTemplateName(tmpl *parser.HTMLTemplate) string {
 	}
 	// Extract template name from the expression value
 	// The expression value is like "Container(child templ.Component)"
-	// We need to extract just "Container"
-	exprValue := tmpl.Expression.Value
+	// or "(StructComponent) Page(title string)"
+	exprValue := strings.TrimSpace(tmpl.Expression.Value)
+
+	// Check if this is a struct method template
+	if strings.HasPrefix(exprValue, "(") {
+		// Find the closing parenthesis for the receiver
+		if idx := strings.Index(exprValue, ")"); idx != -1 {
+			// Extract the method name after the receiver
+			methodPart := strings.TrimSpace(exprValue[idx+1:])
+			if methodIdx := strings.Index(methodPart, "("); methodIdx != -1 {
+				return strings.TrimSpace(methodPart[:methodIdx])
+			}
+			return methodPart
+		}
+	}
+
+	// Regular template: extract name before the first parenthesis
 	if idx := strings.Index(exprValue, "("); idx != -1 {
 		return strings.TrimSpace(exprValue[:idx])
 	}
-	return strings.TrimSpace(exprValue)
+	return exprValue
+}
+
+// extractStructMethodInfo extracts receiver type and method name from a struct method template
+func extractStructMethodInfo(tmpl *parser.HTMLTemplate) (receiver string, methodName string) {
+	if tmpl == nil {
+		return "", ""
+	}
+
+	exprValue := strings.TrimSpace(tmpl.Expression.Value)
+
+	// Check if this is a struct method template: (ReceiverType) MethodName(...)
+	if !strings.HasPrefix(exprValue, "(") {
+		return "", ""
+	}
+
+	// Find the closing parenthesis for the receiver
+	idx := strings.Index(exprValue, ")")
+	if idx == -1 {
+		return "", ""
+	}
+
+	// Extract receiver (without parentheses)
+	receiverPart := strings.TrimSpace(exprValue[1:idx])
+	// Remove pointer if present
+	receiverPart = strings.TrimPrefix(receiverPart, "*")
+	receiverPart = strings.TrimSpace(receiverPart)
+
+	// Extract method name
+	methodPart := strings.TrimSpace(exprValue[idx+1:])
+	if methodIdx := strings.Index(methodPart, "("); methodIdx != -1 {
+		methodName = strings.TrimSpace(methodPart[:methodIdx])
+	} else {
+		methodName = methodPart
+	}
+
+	return receiverPart, methodName
 }
 
 // extractTemplateParams extracts parameters from a template expression
 func extractTemplateParams(expr parser.Expression) []ParameterInfo {
 	var params []ParameterInfo
-	
+
 	// Parse the parameters from the expression
-	// Format: "TemplateName(param1 type1, param2 type2)"
-	if idx := strings.Index(expr.Value, "("); idx != -1 {
-		if endIdx := strings.LastIndex(expr.Value, ")"); endIdx != -1 {
-			paramsStr := expr.Value[idx+1 : endIdx]
+	// Format: "TemplateName(param1 type1, param2 type2)" or "(Receiver) MethodName(param1 type1)"
+	exprValue := strings.TrimSpace(expr.Value)
+
+	// Skip receiver part if this is a struct method
+	if strings.HasPrefix(exprValue, "(") {
+		if idx := strings.Index(exprValue, ")"); idx != -1 {
+			// Use the part after the receiver
+			exprValue = strings.TrimSpace(exprValue[idx+1:])
+		}
+	}
+
+	if idx := strings.Index(exprValue, "("); idx != -1 {
+		if endIdx := strings.LastIndex(exprValue, ")"); endIdx != -1 {
+			paramsStr := exprValue[idx+1 : endIdx]
 			if paramsStr != "" {
 				// Split by comma
 				paramParts := strings.Split(paramsStr, ",")
@@ -1227,7 +1444,7 @@ func extractTemplateParams(expr parser.Expression) []ParameterInfo {
 					if part == "" {
 						continue
 					}
-					
+
 					// Find the last space to separate name from type
 					lastSpace := strings.LastIndex(part, " ")
 					if lastSpace != -1 {
@@ -1242,27 +1459,230 @@ func extractTemplateParams(expr parser.Expression) []ParameterInfo {
 			}
 		}
 	}
-	
+
 	return params
 }
 
 // analyzeParameterTypeString analyzes a parameter type from its string representation
 func (r *SymbolResolver) analyzeParameterTypeString(param *ParameterInfo) {
 	typeStr := param.Type
-	
+
 	// Basic type analysis
 	param.IsPointer = strings.HasPrefix(typeStr, "*")
 	param.IsSlice = strings.HasPrefix(typeStr, "[]")
 	param.IsMap = strings.HasPrefix(typeStr, "map[")
 	param.IsString = typeStr == "string"
 	param.IsBool = typeStr == "bool"
-	
+
 	// Check for known interfaces
 	if strings.HasSuffix(typeStr, "templ.Component") || typeStr == "templ.Component" {
 		param.IsComponent = true
 	}
-	
+
 	if strings.HasSuffix(typeStr, "templ.Attributer") || typeStr == "templ.Attributer" {
 		param.IsAttributer = true
 	}
+}
+
+// GeneratorContext tracks position in AST during code generation
+type GeneratorContext struct {
+	CurrentTemplate *parser.HTMLTemplate // Current template we're generating
+	ASTPath         []parser.Node        // Path from root to current node
+	LocalScopes     []LocalScope         // Stack of local scopes
+}
+
+// LocalScope represents a scope created by an AST node
+type LocalScope struct {
+	Node      parser.Node          // The AST node that created this scope
+	Variables map[string]*TypeInfo // Variables defined in this scope
+}
+
+// NewGeneratorContext creates a new generator context
+func NewGeneratorContext() *GeneratorContext {
+	return &GeneratorContext{
+		ASTPath:     []parser.Node{},
+		LocalScopes: []LocalScope{},
+	}
+}
+
+// PushScope creates a new scope
+func (ctx *GeneratorContext) PushScope(node parser.Node) {
+	scope := LocalScope{
+		Node:      node,
+		Variables: make(map[string]*TypeInfo),
+	}
+	ctx.LocalScopes = append(ctx.LocalScopes, scope)
+}
+
+// PopScope removes the current scope
+func (ctx *GeneratorContext) PopScope() {
+	if len(ctx.LocalScopes) > 0 {
+		ctx.LocalScopes = ctx.LocalScopes[:len(ctx.LocalScopes)-1]
+	}
+}
+
+// AddVariable adds a variable to the current scope
+func (ctx *GeneratorContext) AddVariable(name string, typeInfo *TypeInfo) {
+	if len(ctx.LocalScopes) > 0 {
+		currentScope := &ctx.LocalScopes[len(ctx.LocalScopes)-1]
+		currentScope.Variables[name] = typeInfo
+	}
+}
+
+// EnterNode adds a node to the AST path
+func (ctx *GeneratorContext) EnterNode(node parser.Node) {
+	ctx.ASTPath = append(ctx.ASTPath, node)
+}
+
+// ExitNode removes the current node from the AST path
+func (ctx *GeneratorContext) ExitNode() {
+	if len(ctx.ASTPath) > 0 {
+		ctx.ASTPath = ctx.ASTPath[:len(ctx.ASTPath)-1]
+	}
+}
+
+// SetCurrentTemplate sets the current template being generated
+func (ctx *GeneratorContext) SetCurrentTemplate(tmpl *parser.HTMLTemplate) {
+	ctx.CurrentTemplate = tmpl
+	// When entering a template, we don't push a new scope here
+	// The parameters are added separately by the caller
+}
+
+// ClearCurrentTemplate clears the current template
+func (ctx *GeneratorContext) ClearCurrentTemplate() {
+	if ctx.CurrentTemplate != nil {
+		ctx.PopScope() // Remove template parameter scope
+		ctx.CurrentTemplate = nil
+	}
+}
+
+// extractForLoopVariables extracts variables from a for expression
+// e.g., "for i, item := range items" -> ["i", "item"]
+func extractForLoopVariables(expr parser.Expression) map[string]*TypeInfo {
+	vars := make(map[string]*TypeInfo)
+
+	// Simple parser for common for loop patterns
+	// This is a simplified version - real implementation would be more robust
+	exprStr := strings.TrimSpace(expr.Value)
+
+	// Handle "for i, v := range expr" pattern
+	if strings.Contains(exprStr, ":=") && strings.Contains(exprStr, "range") {
+		parts := strings.Split(exprStr, ":=")
+		if len(parts) >= 2 {
+			varPart := strings.TrimSpace(parts[0])
+			varNames := strings.Split(varPart, ",")
+
+			for i, varName := range varNames {
+				varName = strings.TrimSpace(varName)
+				if varName != "" && varName != "_" {
+					// First variable in range is usually index/key
+					if i == 0 {
+						vars[varName] = &TypeInfo{
+							FullType: "int", // Simplified - could be string for maps
+							IsString: false,
+						}
+					} else {
+						// Second variable is the value - type unknown without more context
+						vars[varName] = &TypeInfo{
+							FullType: "interface{}", // Generic type
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Handle "for i := 0; i < n; i++" pattern
+	// The variable is available in the loop scope
+	if strings.Contains(exprStr, ";") {
+		parts := strings.Split(exprStr, ";")
+		if len(parts) > 0 && strings.Contains(parts[0], ":=") {
+			initPart := strings.TrimSpace(parts[0])
+			assignParts := strings.Split(initPart, ":=")
+			if len(assignParts) >= 2 {
+				varName := strings.TrimSpace(assignParts[0])
+				if varName != "" {
+					vars[varName] = &TypeInfo{
+						FullType: "int",
+					}
+				}
+			}
+		}
+	}
+
+	return vars
+}
+
+// extractIfConditionVariables extracts variables from if condition
+// e.g., "if err := doSomething(); err != nil" -> ["err"]
+func extractIfConditionVariables(expr parser.Expression) map[string]*TypeInfo {
+	vars := make(map[string]*TypeInfo)
+
+	exprStr := strings.TrimSpace(expr.Value)
+
+	// Handle short variable declaration in if condition
+	if strings.Contains(exprStr, ":=") {
+		// Split by semicolon in case of "if x := expr; condition"
+		parts := strings.Split(exprStr, ";")
+		for _, part := range parts {
+			if strings.Contains(part, ":=") {
+				assignParts := strings.Split(part, ":=")
+				if len(assignParts) >= 2 {
+					varName := strings.TrimSpace(assignParts[0])
+					if varName != "" && varName != "_" {
+						// Without type analysis, we can't know the exact type
+						vars[varName] = &TypeInfo{
+							FullType: "interface{}",
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return vars
+}
+
+// extractSwitchVariables extracts variables from switch expression
+func extractSwitchVariables(expr parser.Expression) map[string]*TypeInfo {
+	vars := make(map[string]*TypeInfo)
+
+	exprStr := strings.TrimSpace(expr.Value)
+
+	// Handle "switch x := expr; x" pattern
+	if strings.Contains(exprStr, ":=") && strings.Contains(exprStr, ";") {
+		parts := strings.Split(exprStr, ";")
+		if len(parts) > 0 && strings.Contains(parts[0], ":=") {
+			assignParts := strings.Split(parts[0], ":=")
+			if len(assignParts) >= 2 {
+				varName := strings.TrimSpace(assignParts[0])
+				if varName != "" && varName != "_" {
+					vars[varName] = &TypeInfo{
+						FullType: "interface{}",
+					}
+				}
+			}
+		}
+	}
+
+	return vars
+}
+
+// getPackagePathFromDir determines the package path from a directory
+func (r *SymbolResolver) getPackagePathFromDir(dir string) (string, error) {
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedModule,
+		Dir:  dir,
+	}
+	
+	pkgs, err := packages.Load(cfg, ".")
+	if err != nil {
+		return "", err
+	}
+	
+	if len(pkgs) == 0 {
+		return "", fmt.Errorf("no package found in directory %s", dir)
+	}
+	
+	return pkgs[0].PkgPath, nil
 }
