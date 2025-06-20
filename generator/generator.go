@@ -17,6 +17,7 @@ import (
 	_ "embed"
 
 	"github.com/a-h/templ/parser/v2"
+	"golang.org/x/tools/go/packages"
 )
 
 type GenerateOpt func(g *generator) error
@@ -59,15 +60,11 @@ func WithSkipCodeGeneratedComment() GenerateOpt {
 	}
 }
 
-// WithWorkingDir sets the working directory for symbol resolution
+// WithWorkingDir enables component resolution using the unified resolver
+// The working directory is now automatically detected using modcheck.WalkUp
 func WithWorkingDir(dir string) GenerateOpt {
 	return func(g *generator) error {
-		g.symbolResolver = SymbolResolver{
-			cache:      make(map[string]ComponentSignature),
-			workingDir: dir,
-		}
-		g.symbolResolverEnabled = true
-		g.componentSigs = make(ComponentSignatures)
+		g.unifiedResolver = NewAutoDetectUnifiedResolver()
 		return nil
 	}
 }
@@ -124,11 +121,9 @@ func HasChanged(previous, updated GeneratorOutput) bool {
 // to the location of the generated Go code in the output.
 func Generate(template *parser.TemplateFile, w io.Writer, opts ...GenerateOpt) (op GeneratorOutput, err error) {
 	g := &generator{
-		tf:            template,
-		w:             NewRangeWriter(w),
-		sourceMap:     parser.NewSourceMap(),
-		templResolver: make(TemplSignatureResolver),
-		componentSigs: make(ComponentSignatures),
+		tf:        template,
+		w:         NewRangeWriter(w),
+		sourceMap: parser.NewSourceMap(),
 	}
 	for _, opt := range opts {
 		if err = opt(g); err != nil {
@@ -150,12 +145,9 @@ type generator struct {
 	variableID  int
 	childrenVar string
 
-	options               GeneratorOptions
-	symbolResolver        SymbolResolver
-	symbolResolverEnabled bool
-	templResolver         TemplSignatureResolver
-	componentSigs         ComponentSignatures
-	diagnostics           []parser.Diagnostic
+	options         GeneratorOptions
+	unifiedResolver UnifiedResolver
+	diagnostics     []parser.Diagnostic
 
 	// currentTemplate tracks the current Templ block being processed.
 	// This is used to resolve component signatures.
@@ -163,7 +155,10 @@ type generator struct {
 }
 
 func (g *generator) generate() (err error) {
-	g.templResolver.ExtractSignatures(g.tf)
+	// Extract local template signatures if unified resolver is available
+	if g.unifiedResolver != nil {
+		g.unifiedResolver.ExtractSignatures(g.tf)
+	}
 
 	if err = g.collectAndResolveComponents(); err != nil {
 		return fmt.Errorf("failed to resolve components: %w", err)
@@ -194,6 +189,38 @@ func (g *generator) generate() (err error) {
 		return
 	}
 	return err
+}
+
+// currentFileDir returns the directory of the current template file being processed
+func (g *generator) currentFileDir() string {
+	if g.options.FileName != "" {
+		return filepath.Dir(g.options.FileName)
+	}
+	return "."
+}
+
+// getCurrentPackagePath returns the Go package path for the current template file
+func (g *generator) getCurrentPackagePath() (string, error) {
+	if g.unifiedResolver == nil {
+		return "", fmt.Errorf("unified resolver not available")
+	}
+	
+	// Use packages.Load to find the current package path
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedModule,
+		Dir:  g.currentFileDir(),
+	}
+	
+	pkgs, err := packages.Load(cfg, ".")
+	if err != nil {
+		return "", fmt.Errorf("failed to load current package: %w", err)
+	}
+	
+	if len(pkgs) == 0 {
+		return "", fmt.Errorf("no package found in current directory")
+	}
+	
+	return pkgs[0].PkgPath, nil
 }
 
 // See https://pkg.go.dev/cmd/go#hdr-Generate_Go_files_by_processing_source
@@ -1679,8 +1706,8 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 
 	// In this block, we want to support { child } expression for templ.Component variables.
 	// Which means we only support local block variables, and not global variables.
-	if g.currentTemplate != nil {
-		if templSig, ok := g.templResolver.Get(g.getTemplateName(g.currentTemplate)); ok {
+	if g.currentTemplate != nil && g.unifiedResolver != nil {
+		if templSig, ok := g.unifiedResolver.GetLocalTemplate(g.getTemplateName(g.currentTemplate)); ok {
 			// Check if expression value matches a parameter name with templ.Component type
 			exprValue := strings.TrimSpace(e.Value)
 			for _, param := range templSig.Parameters {

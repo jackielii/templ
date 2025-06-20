@@ -416,7 +416,7 @@ func (g *generator) writeRestAppend(indentLevel int, restVarName string, key str
 }
 
 func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser.ElementComponent) (err error) {
-	sigs, ok := g.componentSigs.Get(n.Name)
+	sigs, ok := g.unifiedResolver.GetComponentSignature(n.Name)
 	if !ok {
 		return fmt.Errorf("component %s signature not found at %s:%d:%d", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col)
 	}
@@ -528,10 +528,12 @@ func (g *generator) tryResolveStructMethod(componentName string) bool {
 				if typeName != "" {
 					// Look for signature with TypeName.MethodName
 					candidateSig := typeName + "." + methodName
-					if _, ok := g.templResolver.Get(candidateSig); ok {
-						// Add alias mapping for future lookups
-						g.templResolver.AddAlias(componentName, candidateSig)
-						return true
+					if g.unifiedResolver != nil {
+						if _, ok := g.unifiedResolver.GetLocalTemplate(candidateSig); ok {
+							// Add alias mapping for future lookups
+							g.unifiedResolver.AddLocalTemplateAlias(componentName, candidateSig)
+							return true
+						}
 					}
 				}
 			}
@@ -709,36 +711,44 @@ func (g *generator) collectAndResolveComponents() error {
 		var found bool
 
 		if comp.PackageName == "" {
-			// Local component - check both simple name and full name for receiver methods
-			if templSig, ok := g.templResolver.Get(comp.Name); ok {
-				sig = templSig
-				found = true
-			} else {
-				// If this looks like a struct method (var.Method), try to resolve it
-				if strings.Contains(comp.Name, ".") {
-					found = g.tryResolveStructMethod(comp.Name)
-					if found {
-						// Find the resolved signature
-						if templSig, ok := g.templResolver.Get(comp.Name); ok {
-							sig = templSig
+			// Local component - check unified resolver first
+			if g.unifiedResolver != nil {
+				// First try local templates
+				if templSig, ok := g.unifiedResolver.GetLocalTemplate(comp.Name); ok {
+					sig = templSig
+					found = true
+				} else {
+					// If this looks like a struct method (var.Method), try to resolve it
+					if strings.Contains(comp.Name, ".") {
+						found = g.tryResolveStructMethod(comp.Name)
+						if found {
+							// Find the resolved signature in local templates
+							if templSig, ok := g.unifiedResolver.GetLocalTemplate(comp.Name); ok {
+								sig = templSig
+							}
 						}
 					}
-				}
 
-				if !found && g.symbolResolverEnabled {
-					// Try Go function resolution
-					sig, err = (&g.symbolResolver).ResolveLocalComponent(comp.Name, comp.Position, g.options.FileName)
-					if err == nil {
-						found = true
+					if !found {
+						// Use unified resolver for local package resolution
+						currentPkgPath, pkgErr := g.getCurrentPackagePath()
+						if pkgErr == nil {
+							sig, err = g.unifiedResolver.ResolveComponentFrom(g.currentFileDir(), currentPkgPath, comp.Name)
+							if err == nil {
+								found = true
+							}
+						} else {
+							err = pkgErr
+						}
 					}
 				}
 			}
 		} else {
-			// Package import - use Go function resolution with resolved import path
-			if g.symbolResolverEnabled {
+			// Package import - use unified resolver with resolved import path
+			if g.unifiedResolver != nil {
 				importPath := g.resolveImportPath(comp.PackageName)
 				if importPath != "" {
-					sig, err = (&g.symbolResolver).ResolveComponentWithPosition(importPath, comp.Name, comp.Position, g.options.FileName)
+					sig, err = g.unifiedResolver.ResolveComponentFrom(g.currentFileDir(), importPath, comp.Name)
 					if err == nil {
 						found = true
 					}
@@ -773,7 +783,9 @@ func (g *generator) collectAndResolveComponents() error {
 			key = comp.PackageName + "." + comp.Name
 		}
 		sig.QualifiedName = key
-		g.componentSigs.Add(sig)
+		if g.unifiedResolver != nil {
+			g.unifiedResolver.AddComponentSignature(sig)
+		}
 	}
 
 	// Don't return an error if no component signatures are resolved

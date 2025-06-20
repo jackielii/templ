@@ -69,8 +69,8 @@ func enhancedMissingComponentDiagnoser(t *parser.TemplateFile, workingDir string
 	// Find defined templ components in this file
 	definedComponents := collectDefinedComponents(t)
 
-	// Create symbol resolver
-	resolver := NewSymbolResolver(workingDir)
+	// Create unified resolver
+	resolver := NewAutoDetectUnifiedResolver()
 
 	// Check each component reference
 	for _, ref := range componentRefs {
@@ -86,7 +86,7 @@ func enhancedMissingComponentDiagnoser(t *parser.TemplateFile, workingDir string
 		}
 
 		// Try to resolve as a Go type implementing templ.Component
-		_, err := resolver.ResolveLocalComponent(ref.Name, parser.Position{}, "")
+		_, err := resolver.ResolveComponentWithPosition(workingDir, "", ref.Name, parser.Position{}, "")
 		if err != nil {
 			// Component not found - add diagnostic
 			diags = append(diags, parser.Diagnostic{
