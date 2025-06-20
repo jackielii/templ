@@ -37,7 +37,6 @@ type ParameterInfo struct {
 	IsBool       bool   // Pre-computed: is bool type
 }
 
-
 // TypeInfo contains comprehensive type information
 type TypeInfo struct {
 	FullType     string // e.g., "templ.Component"
@@ -363,14 +362,32 @@ func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string
 
 	// First pass: collect imports and write top-level Go code
 	hasImports := false
+	hasTemplImport := false
 	for _, node := range tf.Nodes {
 		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
 			// This includes imports, type definitions, variables, etc.
-			sb.WriteString(goExpr.Expression.Value)
-			sb.WriteString("\n\n")
-			if strings.Contains(goExpr.Expression.Value, "import") {
+			exprValue := goExpr.Expression.Value
+
+			// Check if this is an import block
+			if strings.Contains(exprValue, "import") {
 				hasImports = true
+
+				// Check if templ is already imported
+				if strings.Contains(exprValue, "github.com/a-h/templ") && !strings.Contains(exprValue, "templ/generator") {
+					hasTemplImport = true
+				}
+
+				// If this is an import block and templ is not imported, add it
+				if strings.Contains(exprValue, "import (") && !hasTemplImport {
+					// Insert templ import into the existing import block
+					insertPos := strings.Index(exprValue, "import (") + len("import (")
+					exprValue = exprValue[:insertPos] + "\n\t\"github.com/a-h/templ\"" + exprValue[insertPos:]
+					hasTemplImport = true
+				}
 			}
+
+			sb.WriteString(exprValue)
+			sb.WriteString("\n\n")
 		}
 	}
 
@@ -969,6 +986,11 @@ func (r *SymbolResolver) analyzeParameterType(name string, t types.Type) Paramet
 	// assume it's a templ.Attributer (common pattern in templ)
 	if typeStr == "invalid type" && name == "attrs" {
 		isAttributer = true
+	}
+
+	// Special handling for templ.Component type
+	if typeStr == "templ.Component" || typeStr == "github.com/a-h/templ.Component" {
+		isComponent = true
 	}
 
 	return ParameterInfo{
