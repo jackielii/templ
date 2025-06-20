@@ -497,8 +497,8 @@ func (g *generator) writeTemplate(nodeIdx int, t *parser.HTMLTemplate) error {
 	}
 
 	// Set template in context and add parameters to scope
-	g.context.SetCurrentTemplate(t)
-	defer g.context.ClearCurrentTemplate()
+	g.context.setCurrentTemplate(t)
+	defer g.context.clearCurrentTemplate()
 
 	// Add template parameters to scope
 	if sig, ok := g.symbolResolver.getLocalTemplate(g.getTemplateName(t)); ok {

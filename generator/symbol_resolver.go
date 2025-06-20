@@ -39,12 +39,9 @@ type parameterInfo struct {
 // symbolTypeInfo contains comprehensive type information
 type symbolTypeInfo struct {
 	fullType     string // e.g., "templ.Component"
-	pkg          string // e.g., "github.com/a-h/templ"
-	isInterface  bool
 	isPointer    bool
 	isComponent  bool
 	isAttributer bool
-	isError      bool
 	isString     bool
 	isBool       bool
 	isSlice      bool
@@ -567,35 +564,6 @@ func (r *symbolResolver) getLocalTemplate(name string) (componentSignature, bool
 	return componentSignature{}, false
 }
 
-// addLocalTemplateAlias adds an alias for a local template
-func (r *symbolResolver) addLocalTemplateAlias(alias, target string) {
-	// Find the target signature
-	for qualifiedName, sig := range r.signatures {
-		if strings.HasSuffix(qualifiedName, "."+target) {
-			// Create alias with same package path
-			parts := strings.Split(qualifiedName, ".")
-			if len(parts) >= 2 {
-				packagePath := strings.Join(parts[:len(parts)-1], ".")
-				aliasQualifiedName := packagePath + "." + alias
-				r.signatures[aliasQualifiedName] = sig
-			}
-			break
-		}
-	}
-}
-
-// getAllLocalTemplateNames returns all local template names for debugging
-func (r *symbolResolver) getAllLocalTemplateNames() []string {
-	var names []string
-	for qualifiedName := range r.signatures {
-		// Extract just the component name from the qualified name
-		parts := strings.Split(qualifiedName, ".")
-		if len(parts) >= 2 {
-			names = append(names, parts[len(parts)-1])
-		}
-	}
-	return names
-}
 
 // resolveExpression resolves an expression with context awareness
 func (r *symbolResolver) resolveExpression(expr string, ctx *generatorContext, fromDir string) (*symbolTypeInfo, error) {
@@ -661,17 +629,6 @@ func (r *symbolResolver) resolveExpression(expr string, ctx *generatorContext, f
 	}
 
 	return nil, fmt.Errorf("symbol %s not found in current context", expr)
-}
-
-// addComponentSignature adds a resolved component signature for code generation
-func (r *symbolResolver) addComponentSignature(sig componentSignature) {
-	r.signatures[sig.qualifiedName] = sig
-}
-
-// getComponentSignature returns a component signature by qualified name
-func (r *symbolResolver) getComponentSignature(qualifiedName string) (componentSignature, bool) {
-	sig, ok := r.signatures[qualifiedName]
-	return sig, ok
 }
 
 // astTypeToString converts AST type expressions to their string representation
@@ -946,7 +903,6 @@ func getTemplateName(tmpl *parser.HTMLTemplate) string {
 // generatorContext tracks position in AST during code generation
 type generatorContext struct {
 	currentTemplate *parser.HTMLTemplate // Current template we're generating
-	astPath         []parser.Node        // Path from root to current node
 	localScopes     []localScope         // Stack of local scopes
 }
 
@@ -959,7 +915,6 @@ type localScope struct {
 // newGeneratorContext creates a new generator context
 func newGeneratorContext() *generatorContext {
 	return &generatorContext{
-		astPath:     []parser.Node{},
 		localScopes: []localScope{},
 	}
 }
@@ -988,17 +943,6 @@ func (ctx *generatorContext) addVariable(name string, typeInfo *symbolTypeInfo) 
 	}
 }
 
-// enterNode adds a node to the AST path
-func (ctx *generatorContext) enterNode(node parser.Node) {
-	ctx.astPath = append(ctx.astPath, node)
-}
-
-// exitNode removes the current node from the AST path
-func (ctx *generatorContext) exitNode() {
-	if len(ctx.astPath) > 0 {
-		ctx.astPath = ctx.astPath[:len(ctx.astPath)-1]
-	}
-}
 
 // setCurrentTemplate sets the current template being generated
 func (ctx *generatorContext) setCurrentTemplate(tmpl *parser.HTMLTemplate) {
