@@ -60,7 +60,6 @@ func WithSkipCodeGeneratedComment() GenerateOpt {
 	}
 }
 
-
 type GeneratorOutput struct {
 	Options     GeneratorOptions    `json:"meta"`
 	SourceMap   *parser.SourceMap   `json:"sourceMap"`
@@ -138,9 +137,9 @@ type generator struct {
 	variableID  int
 	childrenVar string
 
-	options         GeneratorOptions
+	options        GeneratorOptions
 	symbolResolver SymbolResolver
-	diagnostics     []parser.Diagnostic
+	diagnostics    []parser.Diagnostic
 
 	// context tracks the current position in the AST for symbol resolution
 	context *GeneratorContext
@@ -149,7 +148,7 @@ type generator struct {
 func (g *generator) generate() (err error) {
 	// Initialize context
 	g.context = NewGeneratorContext()
-	
+
 	// Register template file for symbol resolution
 	if err = g.symbolResolver.Register(g.tf, g.options.FileName); err != nil {
 		return err
@@ -206,22 +205,22 @@ func (g *generator) currentFileDir() string {
 // getCurrentPackagePath returns the Go package path for the current template file
 func (g *generator) getCurrentPackagePath() (string, error) {
 	// Unified resolver is always available
-	
+
 	// Use packages.Load to find the current package path
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedModule,
 		Dir:  g.currentFileDir(),
 	}
-	
+
 	pkgs, err := packages.Load(cfg, ".")
 	if err != nil {
 		return "", fmt.Errorf("failed to load current package: %w", err)
 	}
-	
+
 	if len(pkgs) == 0 {
 		return "", fmt.Errorf("no package found in current directory")
 	}
-	
+
 	return pkgs[0].PkgPath, nil
 }
 
@@ -498,7 +497,7 @@ func (g *generator) writeTemplate(nodeIdx int, t *parser.HTMLTemplate) error {
 	// Set template in context and add parameters to scope
 	g.context.SetCurrentTemplate(t)
 	defer g.context.ClearCurrentTemplate()
-	
+
 	// Add template parameters to scope
 	if sig, ok := g.symbolResolver.GetLocalTemplate(g.getTemplateName(t)); ok {
 		for _, param := range sig.Parameters {
@@ -776,17 +775,17 @@ func escapeQuotes(s string) string {
 
 func (g *generator) writeIfExpression(indentLevel int, n *parser.IfExpression, nextNode parser.Node) (err error) {
 	var r parser.Range
-	
+
 	// Push new scope for the if statement
 	g.context.PushScope(n)
 	defer g.context.PopScope()
-	
+
 	// Extract and add condition variables to scope
 	condVars := extractIfConditionVariables(n.Expression)
 	for name, typeInfo := range condVars {
 		g.context.AddVariable(name, typeInfo)
 	}
-	
+
 	// if
 	if _, err = g.w.WriteIndent(indentLevel, `if `); err != nil {
 		return err
@@ -995,17 +994,17 @@ func (g *generator) writeCallTemplateExpression(indentLevel int, n *parser.CallT
 
 func (g *generator) writeForExpression(indentLevel int, n *parser.ForExpression, next parser.Node) (err error) {
 	var r parser.Range
-	
+
 	// Push new scope for the for loop
 	g.context.PushScope(n)
 	defer g.context.PopScope()
-	
+
 	// Extract and add loop variables to scope
 	loopVars := extractForLoopVariables(n.Expression)
 	for name, typeInfo := range loopVars {
 		g.context.AddVariable(name, typeInfo)
 	}
-	
+
 	// for
 	if _, err = g.w.WriteIndent(indentLevel, `for `); err != nil {
 		return err

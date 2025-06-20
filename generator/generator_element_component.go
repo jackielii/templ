@@ -156,7 +156,7 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 		}
 	}
 	return elementComponentAttributes{
-		params:    params,  // Use params without the attrs parameter
+		params:    params, // Use params without the attrs parameter
 		attrs:     ordered,
 		keys:      keys,
 		restAttrs: rest,
@@ -172,21 +172,21 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 		// For expression attributes with component parameters, we need to determine
 		// if the expression itself evaluates to a component or needs wrapping
 		exprValue := strings.TrimSpace(attr.Expression.Value)
-		
+
 		// Try to resolve the expression type using context
 		typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, *g.context, g.currentFileDir())
 		if err == nil && typeInfo.IsComponent {
 			// We know for sure it's a component, pass it directly
 			return exprValue, nil
 		}
-		
+
 		// If we can't resolve or it's not a component, check if it's a simple identifier
 		// that might be a component (backward compatibility)
 		if isValidIdentifier(exprValue) {
 			// For simple identifiers, we'll pass them through and let runtime handle it
 			return exprValue, nil
 		}
-		
+
 		// Otherwise, handle as a potentially error-returning expression
 		// The expression might return (Component, error) or (string, error) or other types
 		varName = g.createVariableName()
@@ -204,7 +204,7 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 		if err = g.writeExpressionErrorHandler(indentLevel, attr.Expression); err != nil {
 			return "", err
 		}
-		
+
 		// Create a component wrapper that handles both component and non-component values
 		// Use type assertion to check if the value is already a component
 		wrapperName := g.createVariableName()
@@ -226,9 +226,9 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 		if _, err = g.w.WriteIndent(indentLevel, "}\n"); err != nil {
 			return "", err
 		}
-		
+
 		return wrapperName, nil
-		
+
 	case *parser.ConstantAttribute:
 		// String constants need to be wrapped in Stringable for component parameters
 		value := `"` + attr.Value + `"`
