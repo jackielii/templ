@@ -172,27 +172,19 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 	case *parser.ExpressionAttribute:
 		// For expression attributes with component parameters, we need to determine
 		// if the expression itself evaluates to a component or needs wrapping
-		
-		// Simple heuristic: if the expression is just a variable name or simple property access,
-		// assume it's already a component and don't wrap it
 		exprValue := strings.TrimSpace(attr.Expression.Value)
-		isSimpleComponentExpr := false
 		
-		// Check if it's a simple identifier (variable name)
+		// Try to resolve the expression type using context
+		typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, *g.context)
+		if err == nil && typeInfo.IsComponent {
+			// We know for sure it's a component, pass it directly
+			return exprValue, nil
+		}
+		
+		// If we can't resolve or it's not a component, check if it's a simple identifier
+		// that might be a component (backward compatibility)
 		if isValidIdentifier(exprValue) {
-			isSimpleComponentExpr = true
-		}
-		
-		// Check if it's a simple property access (e.g., obj.Property)
-		if !isSimpleComponentExpr && strings.Count(exprValue, ".") == 1 {
-			parts := strings.Split(exprValue, ".")
-			if len(parts) == 2 && isValidIdentifier(parts[0]) && isValidIdentifier(parts[1]) {
-				isSimpleComponentExpr = true
-			}
-		}
-		
-		// If it's a simple component expression, return it directly
-		if isSimpleComponentExpr {
+			// For simple identifiers, we'll pass them through and let runtime handle it
 			return exprValue, nil
 		}
 		

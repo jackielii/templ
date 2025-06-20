@@ -52,19 +52,37 @@ func (e ComponentResolutionError) Error() string {
 	return fmt.Sprintf("%s:%d:%d: %v", e.FileName, e.Position.Line, e.Position.Col, e.Err)
 }
 
+// TypeInfo contains comprehensive type information
+type TypeInfo struct {
+	FullType     string // e.g., "templ.Component"
+	Package      string // e.g., "github.com/a-h/templ"
+	IsInterface  bool
+	IsPointer    bool
+	IsComponent  bool   // Pre-computed: implements templ.Component
+	IsAttributer bool   // Pre-computed: implements templ.Attributer
+	IsError      bool   // Pre-computed: is error type
+	IsString     bool   // Pre-computed: is string type
+	IsBool       bool   // Pre-computed: is bool type
+	IsSlice      bool   // Pre-computed: is slice type
+	IsMap        bool   // Pre-computed: is map type
+}
 
 // SymbolResolver automatically detects module roots and provides unified resolution
 // for both templ templates and Go components across packages
 type SymbolResolver struct {
-	signatures map[string]ComponentSignature // Cache keyed by fully qualified names
-	overlay    map[string][]byte             // Go file overlays for templ templates
+	signatures     map[string]ComponentSignature // Cache keyed by fully qualified names
+	overlay        map[string][]byte             // Go file overlays for templ templates
+	localTemplates map[string]ComponentSignature // Local template signatures
+	cachedPackage  *packages.Package             // Lazily loaded package with full type info
+	currentFile    string                        // Current file being processed
 }
 
 // newSymbolResolver creates a new symbol resolver
 func newSymbolResolver() SymbolResolver {
 	return SymbolResolver{
-		signatures: make(map[string]ComponentSignature),
-		overlay:    make(map[string][]byte),
+		signatures:     make(map[string]ComponentSignature),
+		overlay:        make(map[string][]byte),
+		localTemplates: make(map[string]ComponentSignature),
 	}
 }
 
@@ -579,40 +597,76 @@ func (r *SymbolResolver) extractTypeSignature(tn *types.TypeName, pkgPath string
 }
 
 // ExtractSignatures walks through a templ file and extracts all template signatures
-// This replaces the functionality of TemplSignatureResolver.ExtractSignatures
-func (r *SymbolResolver) ExtractSignatures(tf *parser.TemplateFile) {
-	// Determine the package path for this template file
-	var packagePath string
-	if tf.Package.Expression.Value != "" {
-		packagePath = tf.Package.Expression.Value
-	} else {
-		packagePath = "main" // fallback
-	}
-	
-	// TODO: Get actual module path for fully qualified names
-	// For now, we'll use simple package names and enhance later
-	
+// Register registers a template file for potential symbol resolution
+// This method replaces ExtractSignatures and uses lazy loading
+func (r *SymbolResolver) Register(tf *parser.TemplateFile) {
+	// Extract local template signatures (cheap operation)
 	for _, node := range tf.Nodes {
-		switch n := node.(type) {
-		case *parser.HTMLTemplate:
-			sig, ok := r.extractHTMLTemplateSignature(n)
-			if ok {
-				sig.PackagePath = packagePath
-				sig.QualifiedName = packagePath + "." + sig.Name
-				r.signatures[sig.QualifiedName] = sig
-			}
-		case *parser.TemplateFileGoExpression:
-			// Extract type definitions that might implement Component
-			r.extractGoTypeSignatures(n, packagePath)
+		if tmpl, ok := node.(*parser.HTMLTemplate); ok {
+			sig := r.extractLocalTemplateSignature(tmpl)
+			r.localTemplates[sig.Name] = sig
 		}
 	}
+	
+	// TODO: Generate overlay (in-memory Go code) for lazy loading
+	// For now, we'll rely on the existing template signatures
+}
+
+// ensurePackageLoaded lazily loads the package with full type information
+func (r *SymbolResolver) ensurePackageLoaded(fromDir string) error {
+	if r.cachedPackage != nil {
+		return nil // Already loaded
+	}
+	
+	cfg := &packages.Config{
+		Mode: packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax | packages.NeedTypesInfo,
+		Dir:  fromDir,
+		Overlay: r.overlay,
+	}
+	
+	pkgs, err := packages.Load(cfg, ".")
+	if err != nil {
+		return fmt.Errorf("failed to load package: %w", err)
+	}
+	
+	if len(pkgs) == 0 {
+		return fmt.Errorf("no packages found")
+	}
+	
+	r.cachedPackage = pkgs[0]
+	return nil
+}
+
+// extractLocalTemplateSignature extracts signature from a template node
+func (r *SymbolResolver) extractLocalTemplateSignature(tmpl *parser.HTMLTemplate) ComponentSignature {
+	sig := ComponentSignature{
+		Name: getTemplateName(tmpl),
+	}
+	
+	// Parse parameters from the expression
+	params := extractTemplateParams(tmpl.Expression)
+	sig.Parameters = make([]ParameterInfo, len(params))
+	
+	for i, p := range params {
+		sig.Parameters[i] = ParameterInfo{
+			Name: p.Name,
+			Type: p.Type,
+		}
+		// Analyze parameter type
+		r.analyzeParameterTypeString(&sig.Parameters[i])
+	}
+	
+	return sig
 }
 
 // GetLocalTemplate returns a local template signature by name  
 // This method is for backward compatibility - prefer using fully qualified names
 func (r *SymbolResolver) GetLocalTemplate(name string) (ComponentSignature, bool) {
-	// Search for any signature ending with the component name
-	// This is a temporary compatibility method
+	// First check local templates
+	if sig, ok := r.localTemplates[name]; ok {
+		return sig, true
+	}
+	// Then check signatures cache
 	for qualifiedName, sig := range r.signatures {
 		if strings.HasSuffix(qualifiedName, "."+name) {
 			return sig, true
@@ -649,6 +703,43 @@ func (r *SymbolResolver) GetAllLocalTemplateNames() []string {
 		}
 	}
 	return names
+}
+
+// ResolveExpression resolves an expression with context awareness
+func (r *SymbolResolver) ResolveExpression(expr string, ctx GeneratorContext) (*TypeInfo, error) {
+	expr = strings.TrimSpace(expr)
+	
+	// First check template parameters if we're in a template
+	if ctx.CurrentTemplate != nil {
+		tmplName := getTemplateName(ctx.CurrentTemplate)
+		if sig, ok := r.localTemplates[tmplName]; ok {
+			for _, param := range sig.Parameters {
+				if param.Name == expr {
+					return &TypeInfo{
+						FullType:     param.Type,
+						IsComponent:  param.IsComponent,
+						IsAttributer: param.IsAttributer,
+						IsPointer:    param.IsPointer,
+						IsSlice:      param.IsSlice,
+						IsMap:        param.IsMap,
+						IsString:     param.IsString,
+						IsBool:       param.IsBool,
+					}, nil
+				}
+			}
+		}
+	}
+	
+	// Then check local scopes (for loops, if statements, etc.)
+	for i := len(ctx.LocalScopes) - 1; i >= 0; i-- {
+		if typeInfo, ok := ctx.LocalScopes[i].Variables[expr]; ok {
+			return typeInfo, nil
+		}
+	}
+	
+	// For now, return an error if not found
+	// TODO: Implement package-level symbol resolution with lazy loading
+	return nil, fmt.Errorf("symbol %s not found in current context", expr)
 }
 
 // AddComponentSignature adds a resolved component signature for code generation
@@ -1102,4 +1193,76 @@ func (r *SymbolResolver) extractStructFieldsWithTypeAnalysis(t types.Type) []Par
 // extractStructFields extracts exported struct fields for struct components (legacy compatibility)
 func (r *SymbolResolver) extractStructFields(t types.Type) []ParameterInfo {
 	return r.extractStructFieldsWithTypeAnalysis(t)
+}
+
+// getTemplateName extracts the template name from an HTMLTemplate node
+func getTemplateName(tmpl *parser.HTMLTemplate) string {
+	if tmpl == nil {
+		return ""
+	}
+	// Extract template name from the expression value
+	// The expression value is like "Container(child templ.Component)"
+	// We need to extract just "Container"
+	exprValue := tmpl.Expression.Value
+	if idx := strings.Index(exprValue, "("); idx != -1 {
+		return strings.TrimSpace(exprValue[:idx])
+	}
+	return strings.TrimSpace(exprValue)
+}
+
+// extractTemplateParams extracts parameters from a template expression
+func extractTemplateParams(expr parser.Expression) []ParameterInfo {
+	var params []ParameterInfo
+	
+	// Parse the parameters from the expression
+	// Format: "TemplateName(param1 type1, param2 type2)"
+	if idx := strings.Index(expr.Value, "("); idx != -1 {
+		if endIdx := strings.LastIndex(expr.Value, ")"); endIdx != -1 {
+			paramsStr := expr.Value[idx+1 : endIdx]
+			if paramsStr != "" {
+				// Split by comma
+				paramParts := strings.Split(paramsStr, ",")
+				for _, part := range paramParts {
+					part = strings.TrimSpace(part)
+					if part == "" {
+						continue
+					}
+					
+					// Find the last space to separate name from type
+					lastSpace := strings.LastIndex(part, " ")
+					if lastSpace != -1 {
+						name := strings.TrimSpace(part[:lastSpace])
+						typeStr := strings.TrimSpace(part[lastSpace+1:])
+						params = append(params, ParameterInfo{
+							Name: name,
+							Type: typeStr,
+						})
+					}
+				}
+			}
+		}
+	}
+	
+	return params
+}
+
+// analyzeParameterTypeString analyzes a parameter type from its string representation
+func (r *SymbolResolver) analyzeParameterTypeString(param *ParameterInfo) {
+	typeStr := param.Type
+	
+	// Basic type analysis
+	param.IsPointer = strings.HasPrefix(typeStr, "*")
+	param.IsSlice = strings.HasPrefix(typeStr, "[]")
+	param.IsMap = strings.HasPrefix(typeStr, "map[")
+	param.IsString = typeStr == "string"
+	param.IsBool = typeStr == "bool"
+	
+	// Check for known interfaces
+	if strings.HasSuffix(typeStr, "templ.Component") || typeStr == "templ.Component" {
+		param.IsComponent = true
+	}
+	
+	if strings.HasSuffix(typeStr, "templ.Attributer") || typeStr == "templ.Attributer" {
+		param.IsAttributer = true
+	}
 }
