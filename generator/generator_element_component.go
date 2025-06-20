@@ -3,6 +3,8 @@ package generator
 import (
 	"fmt"
 	"slices"
+	"strings"
+	"unicode"
 
 	_ "embed"
 
@@ -168,6 +170,34 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 	case *parser.InlineComponentAttribute:
 		return g.writeChildrenComponent(indentLevel, attr.Children)
 	case *parser.ExpressionAttribute:
+		// For expression attributes with component parameters, we need to determine
+		// if the expression itself evaluates to a component or needs wrapping
+		
+		// Simple heuristic: if the expression is just a variable name or simple property access,
+		// assume it's already a component and don't wrap it
+		exprValue := strings.TrimSpace(attr.Expression.Value)
+		isSimpleComponentExpr := false
+		
+		// Check if it's a simple identifier (variable name)
+		if isValidIdentifier(exprValue) {
+			isSimpleComponentExpr = true
+		}
+		
+		// Check if it's a simple property access (e.g., obj.Property)
+		if !isSimpleComponentExpr && strings.Count(exprValue, ".") == 1 {
+			parts := strings.Split(exprValue, ".")
+			if len(parts) == 2 && isValidIdentifier(parts[0]) && isValidIdentifier(parts[1]) {
+				isSimpleComponentExpr = true
+			}
+		}
+		
+		// If it's a simple component expression, return it directly
+		if isSimpleComponentExpr {
+			return exprValue, nil
+		}
+		
+		// Otherwise, handle as a potentially error-returning expression
+		// The expression might return (Component, error) or (string, error) or other types
 		varName = g.createVariableName()
 		var r parser.Range
 		if _, err = g.w.WriteIndent(indentLevel, varName+", templ_7745c5c3_Err := templ.JoinAnyErrs("); err != nil {
@@ -183,8 +213,33 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 		if err = g.writeExpressionErrorHandler(indentLevel, attr.Expression); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("templ.Stringable(%s)", varName), nil
+		
+		// Create a component wrapper that handles both component and non-component values
+		// Use type assertion to check if the value is already a component
+		wrapperName := g.createVariableName()
+		if _, err = g.w.WriteIndent(indentLevel, fmt.Sprintf("var %s templ.Component\n", wrapperName)); err != nil {
+			return "", err
+		}
+		if _, err = g.w.WriteIndent(indentLevel, fmt.Sprintf("if comp, ok := any(%s).(templ.Component); ok {\n", varName)); err != nil {
+			return "", err
+		}
+		if _, err = g.w.WriteIndent(indentLevel+1, fmt.Sprintf("%s = comp\n", wrapperName)); err != nil {
+			return "", err
+		}
+		if _, err = g.w.WriteIndent(indentLevel, "} else {\n"); err != nil {
+			return "", err
+		}
+		if _, err = g.w.WriteIndent(indentLevel+1, fmt.Sprintf("%s = templ.Stringable(fmt.Sprint(%s))\n", wrapperName, varName)); err != nil {
+			return "", err
+		}
+		if _, err = g.w.WriteIndent(indentLevel, "}\n"); err != nil {
+			return "", err
+		}
+		
+		return wrapperName, nil
+		
 	case *parser.ConstantAttribute:
+		// String constants need to be wrapped in Stringable for component parameters
 		value := `"` + attr.Value + `"`
 		if attr.SingleQuote {
 			value = `'` + attr.Value + `'`
@@ -506,4 +561,23 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 	}
 
 	return nil
+}
+
+// isValidIdentifier checks if a string is a valid Go identifier
+func isValidIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if i == 0 {
+			if !unicode.IsLetter(r) && r != '_' {
+				return false
+			}
+		} else {
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+				return false
+			}
+		}
+	}
+	return true
 }

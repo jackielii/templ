@@ -69,6 +69,7 @@ templ ElementComponent(attrs templ.Attributer) {
 			}
 			enabled?={ isEnabled() }
 		/>
+		<TestNestedComponents content={<span>nested</span>}/>
 	</div>
 }
 
@@ -76,7 +77,7 @@ var structComp StructComponent
 
 templ Container(child templ.Component) {
 	<div class="container">
-		{ child }
+		{child}
 	</div>
 }
 
@@ -156,3 +157,22 @@ func shouldShow() (bool, error) {
 func strErr() (string, error) {
 	return "str with err", nil
 }
+
+templ Parent() {
+	<div class="parent">
+		{ children... }
+	</div>
+}
+
+templ Child() {
+	<span class="child">Child content</span>
+}
+
+// Test the key functionality: nested components with { child } syntax
+templ TestNestedComponents(content templ.Component) {
+	<Container child={ content } />
+	<Parent>
+		<Child />
+	</Parent>
+}
+
