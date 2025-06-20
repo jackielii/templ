@@ -142,10 +142,6 @@ type generator struct {
 	symbolResolver SymbolResolver
 	diagnostics     []parser.Diagnostic
 
-	// currentTemplate tracks the current Templ block being processed.
-	// This is used to resolve component signatures.
-	currentTemplate *parser.HTMLTemplate
-	
 	// context tracks the current position in the AST for symbol resolution
 	context *GeneratorContext
 }
@@ -486,10 +482,6 @@ func (g *generator) writeTemplate(nodeIdx int, t *parser.HTMLTemplate) error {
 		return errors.New("template is nil")
 	}
 
-	prevTemplate := g.currentTemplate
-	g.currentTemplate = t
-	defer func() { g.currentTemplate = prevTemplate }()
-	
 	// Set template in context and add parameters to scope
 	g.context.SetCurrentTemplate(t)
 	defer g.context.ClearCurrentTemplate()
@@ -1740,18 +1732,12 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 	}
 
 	// In this block, we want to support { child } expression for templ.Component variables.
-	// Which means we only support local block variables, and not global variables.
-	if g.currentTemplate != nil {
-		if templSig, ok := g.symbolResolver.GetLocalTemplate(g.getTemplateName(g.currentTemplate)); ok {
-			// Check if expression value matches a parameter name with templ.Component type
-			exprValue := strings.TrimSpace(e.Value)
-			for _, param := range templSig.Parameters {
-				if param.Name == exprValue && param.IsComponent {
-					// This is a component parameter, use call template expression logic
-					return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})
-				}
-			}
-		}
+	// Try to resolve the expression using context
+	exprValue := strings.TrimSpace(e.Value)
+	typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, *g.context)
+	if err == nil && typeInfo.IsComponent {
+		// This is a component, use call template expression logic
+		return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})
 	}
 
 	var r parser.Range
