@@ -37,19 +37,6 @@ type ParameterInfo struct {
 	IsBool       bool   // Pre-computed: is bool type
 }
 
-// ComponentResolutionError represents an error during component resolution with position information
-type ComponentResolutionError struct {
-	Err      error
-	Position parser.Position
-	FileName string
-}
-
-func (e ComponentResolutionError) Error() string {
-	if e.FileName == "" {
-		return e.Err.Error()
-	}
-	return fmt.Sprintf("%s:%d:%d: %v", e.FileName, e.Position.Line, e.Position.Col, e.Err)
-}
 
 // TypeInfo contains comprehensive type information
 type TypeInfo struct {
@@ -122,7 +109,7 @@ func (r *SymbolResolver) ResolveElementComponent(fromDir, currentPkg string, com
 
 	if packagePath != "" {
 		// Cross-package resolution
-		sig, err = r.ResolveComponentFrom(fromDir, packagePath, localName)
+		sig, err = r.ResolveComponent(fromDir, packagePath, localName)
 	} else {
 		// Local resolution - try multiple strategies
 		sig, err = r.resolveLocalComponent(fromDir, currentPkg, localName, tf)
@@ -222,7 +209,7 @@ func (r *SymbolResolver) resolveLocalComponent(fromDir, currentPkg, componentNam
 		}
 	}
 
-	sig, err := r.ResolveComponentFrom(fromDir, currentPkg, componentName)
+	sig, err := r.ResolveComponent(fromDir, currentPkg, componentName)
 	if err == nil {
 		return sig, nil
 	}
@@ -272,7 +259,7 @@ func (r *SymbolResolver) resolveStructMethod(componentName string, tf *parser.Te
 	}
 
 	// Extract signature
-	sig, err := r.extractComponentSignature(methodObj, pkg.PkgPath, parser.Position{}, "")
+	sig, err := r.extractComponentSignature(methodObj, pkg.PkgPath)
 	if err != nil {
 		return ComponentSignature{}, false
 	}
@@ -283,14 +270,9 @@ func (r *SymbolResolver) resolveStructMethod(componentName string, tf *parser.Te
 	return sig, true
 }
 
-// ResolveComponentFrom resolves a component starting from a specific directory
+// ResolveComponent resolves a component starting from a specific directory
 // This is the primary method used during code generation
-func (r *SymbolResolver) ResolveComponentFrom(fromDir, pkgPath, componentName string) (ComponentSignature, error) {
-	return r.ResolveComponentWithPosition(fromDir, pkgPath, componentName, parser.Position{}, "")
-}
-
-// ResolveComponentWithPosition resolves a component with position information for error reporting
-func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componentName string, pos parser.Position, fileName string) (ComponentSignature, error) {
+func (r *SymbolResolver) ResolveComponent(fromDir, pkgPath, componentName string) (ComponentSignature, error) {
 	// Generate fully qualified name as cache key
 	var qualifiedName string
 	if pkgPath == "" {
@@ -325,11 +307,7 @@ func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componen
 	// Use ensurePackageLoaded which properly handles overlays
 	pkg, err := r.ensurePackageLoaded(loadDir)
 	if err != nil {
-		baseErr := fmt.Errorf("failed to load package %s: %w", pkgPath, err)
-		if fileName != "" {
-			return ComponentSignature{}, ComponentResolutionError{Err: baseErr, Position: pos, FileName: fileName}
-		}
-		return ComponentSignature{}, baseErr
+		return ComponentSignature{}, fmt.Errorf("failed to load package %s: %w", pkgPath, err)
 	}
 	// Allow packages with errors if they're compilation errors from generated files
 	if len(pkg.Errors) > 0 {
@@ -343,34 +321,22 @@ func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componen
 			}
 		}
 		if hasNonTemplErrors {
-			baseErr := fmt.Errorf("package %s has non-generated file errors: %v", pkgPath, pkg.Errors)
-			if fileName != "" {
-				return ComponentSignature{}, ComponentResolutionError{Err: baseErr, Position: pos, FileName: fileName}
-			}
-			return ComponentSignature{}, baseErr
+			return ComponentSignature{}, fmt.Errorf("package %s has non-generated file errors: %v", pkgPath, pkg.Errors)
 		}
 	}
 
 	// Look for the component in the package's type information
 	if pkg.Types == nil {
-		baseErr := fmt.Errorf("no type information available for package %s", pkgPath)
-		if fileName != "" {
-			return ComponentSignature{}, ComponentResolutionError{Err: baseErr, Position: pos, FileName: fileName}
-		}
-		return ComponentSignature{}, baseErr
+		return ComponentSignature{}, fmt.Errorf("no type information available for package %s", pkgPath)
 	}
 
 	obj := pkg.Types.Scope().Lookup(componentName)
 	if obj == nil {
-		baseErr := fmt.Errorf("component %s not found in package %s", componentName, pkgPath)
-		if fileName != "" {
-			return ComponentSignature{}, ComponentResolutionError{Err: baseErr, Position: pos, FileName: fileName}
-		}
-		return ComponentSignature{}, baseErr
+		return ComponentSignature{}, fmt.Errorf("component %s not found in package %s", componentName, pkgPath)
 	}
 
 	// Extract signature using the sophisticated logic from SymbolResolver
-	sig, err := r.extractComponentSignature(obj, pkgPath, pos, fileName)
+	sig, err := r.extractComponentSignature(obj, pkgPath)
 	if err != nil {
 		return ComponentSignature{}, err
 	}
@@ -424,7 +390,8 @@ func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string
 			// Use the parsed AST if available, otherwise fall back to parsing
 			var name string
 			if n.Expression.FuncDecl == nil {
-				return "", fmt.Errorf("HTML template %s does not have a valid function declaration", n.Name)
+				// Skip templates without valid function declarations
+				continue
 			}
 			name = n.Expression.FuncDecl.Name.Name
 			// If this is a receiver method, create a composite name
@@ -466,8 +433,8 @@ func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string
 	return sb.String()
 }
 
-// extractComponentSignature extracts component signature with position-aware error handling
-func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath string, pos parser.Position, fileName string) (ComponentSignature, error) {
+// extractComponentSignature extracts component signature
+func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath string) (ComponentSignature, error) {
 	var paramInfo []ParameterInfo
 	var isStruct, isPointerRecv bool
 
@@ -484,20 +451,12 @@ func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath str
 	} else {
 		typeName, ok := obj.(*types.TypeName)
 		if !ok {
-			baseErr := fmt.Errorf("%s is neither a function nor a type", obj.Name())
-			if fileName != "" {
-				return ComponentSignature{}, ComponentResolutionError{Err: baseErr, Position: pos, FileName: fileName}
-			}
-			return ComponentSignature{}, baseErr
+			return ComponentSignature{}, fmt.Errorf("%s is neither a function nor a type", obj.Name())
 		}
 
 		isStruct, isPointerRecv = r.implementsComponent(typeName.Type(), typeName.Pkg())
 		if !isStruct {
-			baseErr := fmt.Errorf("%s does not implement templ.Component interface", obj.Name())
-			if fileName != "" {
-				return ComponentSignature{}, ComponentResolutionError{Err: baseErr, Position: pos, FileName: fileName}
-			}
-			return ComponentSignature{}, baseErr
+			return ComponentSignature{}, fmt.Errorf("%s does not implement templ.Component interface", obj.Name())
 		}
 
 		// Extract struct fields for struct components
