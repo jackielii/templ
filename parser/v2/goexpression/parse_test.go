@@ -50,7 +50,7 @@ func FuzzIf(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, src string) {
-		start, end, err := If(src)
+		start, end, _, err := If(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -119,7 +119,7 @@ func FuzzFor(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, src string) {
-		start, end, err := For(src)
+		start, end, _, err := For(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -175,7 +175,7 @@ func FuzzSwitch(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, s string) {
 		src := "switch " + s
-		start, end, err := For(src)
+		start, end, _, err := For(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -237,7 +237,7 @@ func FuzzCaseStandard(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, src string) {
-		start, end, err := Case(src)
+		start, end, _, err := Case(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -285,7 +285,7 @@ func FuzzCaseDefault(f *testing.F) {
 		f.Add("default:" + suffix)
 	}
 	f.Fuzz(func(t *testing.T, src string) {
-		start, end, err := Case(src)
+		start, end, _, err := Case(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -537,7 +537,7 @@ func FuzzTemplExpression(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, s string) {
 		src := "switch " + s
-		start, end, err := TemplExpression(src)
+		start, end, _, err := TemplExpression(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -560,7 +560,7 @@ func FuzzExpression(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, s string) {
 		src := "switch " + s
-		start, end, err := Expression(src)
+		start, end, _, err := Expression(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -758,12 +758,12 @@ type testInput struct {
 	expectedErr error
 }
 
-type extractor func(content string) (start, end int, err error)
+type extractor func(content string) (start, end int, stmt any, err error)
 
 func run(test testInput, prefix, suffix string, e extractor) func(t *testing.T) {
 	return func(t *testing.T) {
 		src := prefix + test.input + suffix
-		start, end, err := e(src)
+		start, end, _, err := e(src)
 		if test.expectedErr == nil && err != nil {
 			t.Fatalf("expected nil error got error type %T: %v", err, err)
 		}

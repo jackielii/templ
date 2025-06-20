@@ -63,7 +63,6 @@ func TestExpressionCSSPropertyParser(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			input := parse.NewInput(tt.input + "\n")
 			result, ok, err := expressionCSSPropertyParser.Parse(input)
@@ -73,7 +72,7 @@ func TestExpressionCSSPropertyParser(t *testing.T) {
 			if !ok {
 				t.Fatalf("failed to parse at %d", input.Index())
 			}
-			if diff := cmp.Diff(tt.expected, result); diff != "" {
+			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt); diff != "" {
 				t.Error(diff)
 			}
 		})
@@ -104,7 +103,6 @@ func TestConstantCSSPropertyParser(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			input := parse.NewInput(tt.input + "\n")
 			result, ok, err := constantCSSPropertyParser.Parse(input)
@@ -114,7 +112,7 @@ func TestConstantCSSPropertyParser(t *testing.T) {
 			if !ok {
 				t.Fatalf("failed to parse at %d", input.Index())
 			}
-			if diff := cmp.Diff(tt.expected, result); diff != "" {
+			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt); diff != "" {
 				t.Error(diff)
 			}
 		})
@@ -319,7 +317,6 @@ background-color: { prop };
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			input := parse.NewInput(tt.input)
 			result, ok, err := cssParser.Parse(input)
@@ -329,7 +326,7 @@ background-color: { prop };
 			if !ok {
 				t.Fatalf("failed to parse at %d", input.Index())
 			}
-			if diff := cmp.Diff(tt.expected, result); diff != "" {
+			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt); diff != "" {
 				t.Error(diff)
 			}
 		})

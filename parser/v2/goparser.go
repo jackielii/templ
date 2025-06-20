@@ -20,7 +20,7 @@ func parseGoFuncDecl(prefix string, pi *parse.Input) (name string, expression Ex
 	pi.Take(len(prefix) + len(expr))
 	to := pi.Position()
 	expression = NewExpression(expr, pi.PositionAt(from+len(prefix)), to)
-	expression.FuncDecl = funcDecl
+	expression.Stmt = funcDecl
 	return name, expression, nil
 }
 
@@ -57,16 +57,18 @@ func peekPrefix(pi *parse.Input, prefixes ...string) bool {
 	return false
 }
 
-type extractor func(content string) (start, end int, err error)
+type extractor func(content string) (start, end int, stmt any, err error)
 
 func parseGo(name string, pi *parse.Input, e extractor) (r Expression, err error) {
 	from := pi.Index()
 	src, _ := pi.Peek(-1)
-	start, end, err := e(src)
+	start, end, stmt, err := e(src)
 	if err != nil {
 		return r, parse.Error(fmt.Sprintf("%s: invalid go expression: %v", name, err.Error()), pi.Position())
 	}
 	expr := src[start:end]
 	pi.Take(end)
-	return NewExpression(expr, pi.PositionAt(from+start), pi.PositionAt(from+end)), nil
+	r = NewExpression(expr, pi.PositionAt(from+start), pi.PositionAt(from+end))
+	r.Stmt = stmt
+	return r, nil
 }

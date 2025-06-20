@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"go/ast"
 	"go/format"
 	"io"
 	"strings"
@@ -117,9 +116,7 @@ func (r Range) String() string {
 type Expression struct {
 	Value string
 	Range Range
-	// FuncDecl is the parsed AST node for function declarations.
-	// Only populated for function expressions (templ, css, script).
-	FuncDecl *ast.FuncDecl
+	Stmt  any // The AST node for the expression, if available.
 }
 
 type TemplateFile struct {
