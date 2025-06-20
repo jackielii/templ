@@ -414,7 +414,8 @@ func (g *generator) writeRestAppend(indentLevel int, restVarName string, key str
 
 func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser.ElementComponent) (err error) {
 	// Try to resolve component on-demand
-	sigs, err := g.resolveElementComponent(n)
+	currentPkgPath, _ := g.getCurrentPackagePath()
+	sigs, err := g.symbolResolver.ResolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
 	if err != nil {
 		return fmt.Errorf("component %s at %s:%d:%d: %w", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col, err)
 	}
@@ -506,48 +507,3 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 
 	return nil
 }
-
-
-
-
-
-// resolveElementComponent resolves a component on-demand during code generation
-func (g *generator) resolveElementComponent(n *parser.ElementComponent) (ComponentSignature, error) {
-	// Get current package path for local resolution
-	currentPkgPath, err := g.getCurrentPackagePath()
-	if err != nil {
-		currentPkgPath = "" // Continue without current package path
-	}
-	
-	// Use the symbol resolver's unified element component resolution
-	return g.symbolResolver.ResolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
-}
-
-// collectAndResolveComponents is no longer needed - components are resolved on-demand
-// This function is kept for backward compatibility but does nothing
-func (g *generator) collectAndResolveComponents() error {
-	return nil
-}
-
-// addComponentDiagnostic adds a diagnostic for component resolution issues
-func (g *generator) addComponentDiagnostic(comp ComponentReference, message string) {
-	// Create a Range from the component's position
-	// ComponentReference.Position is the start position of the component name
-	nameStart := comp.Position
-	nameLength := int64(len(comp.Name))
-	nameEnd := parser.Position{
-		Index: nameStart.Index + nameLength,
-		Line:  nameStart.Line,
-		Col:   nameStart.Col + uint32(len(comp.Name)),
-	}
-
-	g.diagnostics = append(g.diagnostics, parser.Diagnostic{
-		Message: message,
-		Range: parser.Range{
-			From: nameStart,
-			To:   nameEnd,
-		},
-	})
-}
-
-// Type checking functions removed - now using cached type analysis in ParameterInfo
