@@ -222,7 +222,6 @@ func (r *SymbolResolver) resolveLocalComponent(fromDir, currentPkg, componentNam
 		}
 	}
 	
-	// Debug: fmt.Printf("DEBUG resolveLocalComponent: fromDir=%s, currentPkg=%s, componentName=%s\n", fromDir, currentPkg, componentName)
 	sig, err := r.ResolveComponentFrom(fromDir, currentPkg, componentName)
 	if err == nil {
 		return sig, nil
@@ -351,8 +350,6 @@ func (r *SymbolResolver) ResolveComponentFrom(fromDir, pkgPath, componentName st
 
 // ResolveComponentWithPosition resolves a component with position information for error reporting
 func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componentName string, pos parser.Position, fileName string) (ComponentSignature, error) {
-	// Debug: fmt.Printf("DEBUG ResolveComponentWithPosition: fromDir=%s, pkgPath=%s, componentName=%s\n", fromDir, pkgPath, componentName)
-	
 	// Generate fully qualified name as cache key
 	var qualifiedName string
 	if pkgPath == "" {
@@ -381,7 +378,6 @@ func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componen
 		pkgs, err := packages.Load(cfg, pkgPath)
 		if err == nil && len(pkgs) > 0 && len(pkgs[0].GoFiles) > 0 {
 			loadDir = filepath.Dir(pkgs[0].GoFiles[0])
-			// Debug: fmt.Printf("DEBUG: Cross-package load - pkgPath=%s, loadDir=%s\n", pkgPath, loadDir)
 		}
 	}
 	
@@ -421,16 +417,6 @@ func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componen
 			return ComponentSignature{}, ComponentResolutionError{Err: baseErr, Position: pos, FileName: fileName}
 		}
 		return ComponentSignature{}, baseErr
-	}
-	
-	// Debug: Check if we have any compilation errors that might affect type resolution
-	if len(pkg.Errors) > 0 {
-		// Log the first few errors for debugging
-		for i := range pkg.Errors {
-			if i < 3 {
-				// fmt.Printf("DEBUG: Package error %d: %v\n", i, pkg.Errors[i])
-			}
-		}
 	}
 
 	obj := pkg.Types.Scope().Lookup(componentName)
@@ -669,9 +655,6 @@ func (r *SymbolResolver) Register(tf *parser.TemplateFile, fileName string) erro
 	overlayContent := r.generateOverlay(tf, pkgName)
 	r.overlay[overlayPath] = []byte(overlayContent)
 	
-	// Debug: log what we're adding to overlay
-	// Debug: fmt.Printf("DEBUG Register: fileName=%s, overlayPath=%s\n", fileName, overlayPath)
-	
 	return nil
 }
 
@@ -736,23 +719,11 @@ func (r *SymbolResolver) ensurePackageLoaded(fromDir string) (*packages.Package,
 		Overlay: r.overlay,
 	}
 	
-	// Debug: fmt.Printf("DEBUG ensurePackageLoaded: fromDir=%s, overlay keys:\n", fromDir)
-	// for k := range r.overlay {
-	// 	fmt.Printf("  - %s\n", k)
-	// }
-	
 	// Process templ files in the package directory to generate overlays
 	// This ensures we have stubs for all templates in the package
-	// Debug: fmt.Printf("DEBUG: calling processTemplFiles for dir: %s\n", fromDir)
 	if err := r.processTemplFiles(fromDir); err != nil {
-		// Log error but don't fail - we can still try to load the package
-		// Debug: fmt.Printf("DEBUG: processTemplFiles error: %v\n", err)
+		// Don't fail - we can still try to load the package
 	}
-	
-	// Debug: fmt.Printf("DEBUG ensurePackageLoaded AFTER processTemplFiles: overlay keys:\n")
-	// for k := range r.overlay {
-	// 	fmt.Printf("  - %s\n", k)
-	// }
 	
 	pkgs, err := packages.Load(cfg, ".")
 	if err != nil {
