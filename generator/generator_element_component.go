@@ -174,7 +174,7 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 		exprValue := strings.TrimSpace(attr.Expression.Value)
 
 		// Try to resolve the expression type using context
-		typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, *g.context, g.currentFileDir())
+		typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, g.context, g.currentFileDir())
 		if err == nil && typeInfo.IsComponent {
 			// We know for sure it's a component, pass it directly
 			return exprValue, nil

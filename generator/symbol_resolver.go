@@ -226,7 +226,7 @@ func (r *SymbolResolver) resolveStructMethod(componentName string, tf *parser.Te
 	methodName := strings.Join(parts[1:], ".")
 
 	// Ensure package is loaded with overlays
-	pkg, err := r.ensurePackageLoaded(fromDir)
+	pkg, err := r.ensurePackageLoaded(fromDir, "")
 	if err != nil {
 		return ComponentSignature{}, false
 	}
@@ -287,23 +287,8 @@ func (r *SymbolResolver) ResolveComponent(fromDir, pkgPath, componentName string
 		}
 	}
 
-	// For cross-package components, we need to load from the target package directory
-	loadDir := fromDir
-	if pkgPath != "" && !strings.HasPrefix(pkgPath, ".") {
-		// This is a cross-package import, we need to find the directory for this package
-		// For now, use packages.Load to find the directory
-		cfg := &packages.Config{
-			Mode: packages.NeedFiles,
-			Dir:  fromDir,
-		}
-		pkgs, err := packages.Load(cfg, pkgPath)
-		if err == nil && len(pkgs) > 0 && len(pkgs[0].GoFiles) > 0 {
-			loadDir = filepath.Dir(pkgs[0].GoFiles[0])
-		}
-	}
-
 	// Use ensurePackageLoaded which properly handles overlays
-	pkg, err := r.ensurePackageLoaded(loadDir)
+	pkg, err := r.ensurePackageLoaded(fromDir, pkgPath)
 	if err != nil {
 		return ComponentSignature{}, fmt.Errorf("failed to load package %s: %w", pkgPath, err)
 	}
@@ -526,22 +511,34 @@ func (r *SymbolResolver) RegisterTemplateOverlay(tf *parser.TemplateFile, fileNa
 }
 
 // ensurePackageLoaded lazily loads the package with full type information
-func (r *SymbolResolver) ensurePackageLoaded(fromDir string) (*packages.Package, error) {
+// It can load either by directory (pattern ".") or by package path
+func (r *SymbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*packages.Package, error) {
+	// Determine the pattern to use
+	if pattern == "" {
+		pattern = "."
+	}
+
+	// For package paths, we use the package path as the cache key
+	// For local packages, we use the directory
+	cacheKey := fromDir
+	if pattern != "." {
+		cacheKey = pattern
+	}
+
 	// Check cache first
-	if pkg, ok := r.packageCache[fromDir]; ok {
+	if pkg, ok := r.packageCache[cacheKey]; ok {
 		return pkg, nil
 	}
 
 	cfg := &packages.Config{
 		Mode: packages.NeedName |
-			packages.NeedFiles |
 			packages.NeedImports |
 			packages.NeedTypes,
 		Dir:     fromDir,
 		Overlay: r.overlay,
 	}
 
-	pkgs, err := packages.Load(cfg, ".")
+	pkgs, err := packages.Load(cfg, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load package: %w", err)
 	}
@@ -566,7 +563,7 @@ func (r *SymbolResolver) ensurePackageLoaded(fromDir string) (*packages.Package,
 		}
 	}
 
-	r.packageCache[fromDir] = pkg
+	r.packageCache[cacheKey] = pkg
 	return pkg, nil
 }
 
@@ -613,7 +610,7 @@ func (r *SymbolResolver) GetAllLocalTemplateNames() []string {
 }
 
 // ResolveExpression resolves an expression with context awareness
-func (r *SymbolResolver) ResolveExpression(expr string, ctx GeneratorContext, fromDir string) (*TypeInfo, error) {
+func (r *SymbolResolver) ResolveExpression(expr string, ctx *GeneratorContext, fromDir string) (*TypeInfo, error) {
 	expr = strings.TrimSpace(expr)
 
 	// First check local scopes (for loops, if statements, etc.)
@@ -626,7 +623,7 @@ func (r *SymbolResolver) ResolveExpression(expr string, ctx GeneratorContext, fr
 	// Then check template parameters if we're in a template
 	if ctx.CurrentTemplate != nil {
 		// Load the current package to get proper type info
-		pkg, err := r.ensurePackageLoaded(fromDir)
+		pkg, err := r.ensurePackageLoaded(fromDir, "")
 		if err == nil {
 			tmplName := getTemplateName(ctx.CurrentTemplate)
 			// Look up the template function in the package
@@ -657,7 +654,7 @@ func (r *SymbolResolver) ResolveExpression(expr string, ctx GeneratorContext, fr
 	}
 
 	// Try package-level symbol resolution
-	pkg, err := r.ensurePackageLoaded(fromDir)
+	pkg, err := r.ensurePackageLoaded(fromDir, "")
 	if err == nil {
 		obj := pkg.Types.Scope().Lookup(expr)
 		if obj != nil {
@@ -905,6 +902,12 @@ func (r *SymbolResolver) extractStructFieldsWithTypeAnalysis(t types.Type) []Par
 
 // getPackagePathFromDir determines the package path from a directory
 func (r *SymbolResolver) getPackagePathFromDir(dir string) (string, error) {
+	// Check if we already have this package loaded in cache
+	if pkg, ok := r.packageCache[dir]; ok {
+		return pkg.PkgPath, nil
+	}
+
+	// Otherwise, do a minimal load just to get the package path
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedModule,
 		Dir:  dir,

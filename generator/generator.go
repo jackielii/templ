@@ -1737,7 +1737,7 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 	// In this block, we want to support { child } expression for templ.Component variables.
 	// Try to resolve the expression using context
 	exprValue := strings.TrimSpace(e.Value)
-	typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, *g.context, g.currentFileDir())
+	typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, g.context, g.currentFileDir())
 	if err == nil && typeInfo.IsComponent {
 		// This is a component, use call template expression logic
 		return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})
