@@ -8,6 +8,7 @@ import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -43,7 +44,7 @@ func ElementComponent(attrs templ.Attributer) templ.Component {
 		}
 		templ_7745c5c3_Var2, templ_7745c5c3_Err := templ.JoinAnyErrs(str())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 15, Col: 23}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 16, Col: 23}
 		}
 		templ_7745c5c3_Err = Button(templ_7745c5c3_Var2).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
@@ -116,7 +117,7 @@ func ElementComponent(attrs templ.Attributer) templ.Component {
 		}
 		templ_7745c5c3_Var5, templ_7745c5c3_Err := templ.JoinAnyErrs("Hello " + str() + "!")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 31, Col: 40}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 32, Col: 40}
 		}
 		templ_7745c5c3_Err = Button(templ_7745c5c3_Var5).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
@@ -155,11 +156,11 @@ func ElementComponent(attrs templ.Attributer) templ.Component {
 		}
 		templ_7745c5c3_Var10, templ_7745c5c3_Err := templ.JoinAnyErrs(42)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 52, Col: 47}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 53, Col: 47}
 		}
 		templ_7745c5c3_Var11, templ_7745c5c3_Err := templ.JoinAnyErrs(shouldShow())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 52, Col: 81}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 53, Col: 81}
 		}
 		templ_7745c5c3_Err = MultiComponent("Multi Test", templ_7745c5c3_Var10, true, templ_7745c5c3_Var11).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
@@ -167,7 +168,7 @@ func ElementComponent(attrs templ.Attributer) templ.Component {
 		}
 		templ_7745c5c3_Var12, templ_7745c5c3_Err := templ.JoinAnyErrs(strErr())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 53, Col: 29}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 54, Col: 29}
 		}
 		var templ_7745c5c3_Var13 templ.Component
 		if comp, ok := any(templ_7745c5c3_Var12).(templ.Component); ok {
@@ -344,7 +345,7 @@ func Button(title string) templ.Component {
 		var templ_7745c5c3_Var22 string
 		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 85, Col: 16}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 86, Col: 16}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 		if templ_7745c5c3_Err != nil {
@@ -386,7 +387,7 @@ func DData(term, detail string) templ.Component {
 		var templ_7745c5c3_Var24 string
 		templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(term)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 89, Col: 11}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 90, Col: 11}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 		if templ_7745c5c3_Err != nil {
@@ -399,7 +400,7 @@ func DData(term, detail string) templ.Component {
 		var templ_7745c5c3_Var25 string
 		templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(detail)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 90, Col: 13}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 91, Col: 13}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 		if templ_7745c5c3_Err != nil {
@@ -441,7 +442,7 @@ func Card(title string) templ.Component {
 		var templ_7745c5c3_Var27 string
 		templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 95, Col: 13}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 96, Col: 13}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 		if templ_7745c5c3_Err != nil {
@@ -532,7 +533,7 @@ func BoolComponent(title string, enabled bool, attrs templ.Attributer) templ.Com
 		var templ_7745c5c3_Var30 string
 		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 112, Col: 13}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 113, Col: 13}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 		if templ_7745c5c3_Err != nil {
@@ -589,7 +590,7 @@ func MultiComponent(title string, count int, enabled bool, visible bool) templ.C
 		var templ_7745c5c3_Var32 string
 		templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 123, Col: 13}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 124, Col: 13}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 		if templ_7745c5c3_Err != nil {
@@ -602,7 +603,7 @@ func MultiComponent(title string, count int, enabled bool, visible bool) templ.C
 		var templ_7745c5c3_Var33 string
 		templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprint(count))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 123, Col: 43}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 124, Col: 43}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 		if templ_7745c5c3_Err != nil {
@@ -632,9 +633,13 @@ func MultiComponent(title string, count int, enabled bool, visible bool) templ.C
 	})
 }
 
-type StructComponent struct{}
+type StructComponent struct {
+	Name    string
+	Child   templ.Component
+	enabled bool
+}
 
-func (StructComponent) Page(title string, attrs templ.Attributer) templ.Component {
+func (s StructComponent) Page(title string, attrs templ.Attributer) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -668,9 +673,9 @@ func (StructComponent) Page(title string, attrs templ.Attributer) templ.Componen
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var35 string
-		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(title)
+		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(cmp.Or(title, s.Name))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 137, Col: 13}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 142, Col: 29}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 		if templ_7745c5c3_Err != nil {

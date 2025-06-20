@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"cmp"
 
 	extern "github.com/a-h/templ/generator/test-element-component/externmod"
 	"github.com/a-h/templ/generator/test-element-component/mod"
@@ -130,11 +131,15 @@ templ MultiComponent(title string, count int, enabled bool, visible bool) {
 	</div>
 }
 
-type StructComponent struct{}
+type StructComponent struct{
+	Name	 string
+	Child  templ.Component
+	enabled bool
+}
 
-templ (StructComponent) Page(title string, attrs templ.Attributer) {
+templ (s StructComponent) Page(title string, attrs templ.Attributer) {
 	<div { attrs... }>
-		<h1>{ title }</h1>
+		<h1>{ cmp.Or(title, s.Name)  }</h1>
 		<p>This is a struct component.</p>
 	</div>
 }
