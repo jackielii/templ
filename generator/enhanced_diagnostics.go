@@ -92,7 +92,7 @@ func enhancedMissingComponentDiagnoser(t *parser.TemplateFile) ([]parser.Diagnos
 		if t.Filepath != "" {
 			fileDir = filepath.Dir(t.Filepath)
 		}
-		_, err := resolver.ResolveComponent(fileDir, "", ref.Name)
+		_, err := resolver.resolveComponent(fileDir, "", ref.Name)
 		if err != nil {
 			// Component not found - add diagnostic
 			diags = append(diags, parser.Diagnostic{

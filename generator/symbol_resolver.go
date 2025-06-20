@@ -13,64 +13,64 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// ComponentSignature represents a templ component's function signature or struct fields
-type ComponentSignature struct {
-	PackagePath   string
-	Name          string
-	QualifiedName string          // For functions: pkgPath.Name, For structs: pkgPath.TypeName
-	Parameters    []ParameterInfo // For functions: parameters, For structs: exported fields
-	IsStruct      bool
-	IsPointerRecv bool
+// componentSignature represents a templ component's function signature or struct fields
+type componentSignature struct {
+	packagePath   string
+	name          string
+	qualifiedName string          // For functions: pkgPath.Name, For structs: pkgPath.TypeName
+	parameters    []parameterInfo // For functions: parameters, For structs: exported fields
+	isStruct      bool
+	isPointerRecv bool
 }
 
-// ParameterInfo represents a function parameter or struct field with rich type information
-type ParameterInfo struct {
-	Name         string
-	Type         string // String representation for display/debugging
-	IsComponent  bool   // Pre-computed: implements templ.Component interface
-	IsAttributer bool   // Pre-computed: implements templ.Attributer interface
-	IsPointer    bool   // Pre-computed: is a pointer type
-	IsSlice      bool   // Pre-computed: is a slice type
-	IsMap        bool   // Pre-computed: is a map type
-	IsString     bool   // Pre-computed: is string type
-	IsBool       bool   // Pre-computed: is bool type
+// parameterInfo represents a function parameter or struct field with rich type information
+type parameterInfo struct {
+	name         string
+	typ          string
+	isComponent  bool
+	isAttributer bool
+	isPointer    bool
+	isSlice      bool
+	isMap        bool
+	isString     bool
+	isBool       bool
 }
 
-// TypeInfo contains comprehensive type information
-type TypeInfo struct {
-	FullType     string // e.g., "templ.Component"
-	Package      string // e.g., "github.com/a-h/templ"
-	IsInterface  bool
-	IsPointer    bool
-	IsComponent  bool // Pre-computed: implements templ.Component
-	IsAttributer bool // Pre-computed: implements templ.Attributer
-	IsError      bool // Pre-computed: is error type
-	IsString     bool // Pre-computed: is string type
-	IsBool       bool // Pre-computed: is bool type
-	IsSlice      bool // Pre-computed: is slice type
-	IsMap        bool // Pre-computed: is map type
+// symbolTypeInfo contains comprehensive type information
+type symbolTypeInfo struct {
+	fullType     string // e.g., "templ.Component"
+	pkg          string // e.g., "github.com/a-h/templ"
+	isInterface  bool
+	isPointer    bool
+	isComponent  bool
+	isAttributer bool
+	isError      bool
+	isString     bool
+	isBool       bool
+	isSlice      bool
+	isMap        bool
 }
 
-// SymbolResolver automatically detects module roots and provides unified resolution
+// symbolResolver automatically detects module roots and provides unified resolution
 // for both templ templates and Go components across packages
-type SymbolResolver struct {
-	signatures   map[string]ComponentSignature // Cache keyed by fully qualified names
+type symbolResolver struct {
+	signatures   map[string]componentSignature // Cache keyed by fully qualified names
 	overlay      map[string][]byte             // Go file overlays for templ templates
 	packageCache map[string]*packages.Package  // Cache of loaded packages by directory
 }
 
 // newSymbolResolver creates a new symbol resolver
-func newSymbolResolver() SymbolResolver {
-	return SymbolResolver{
-		signatures:   make(map[string]ComponentSignature),
+func newSymbolResolver() symbolResolver {
+	return symbolResolver{
+		signatures:   make(map[string]componentSignature),
 		overlay:      make(map[string][]byte),
 		packageCache: make(map[string]*packages.Package),
 	}
 }
 
-// ResolveElementComponent resolves a component for element syntax during code generation
+// resolveElementComponent resolves a component for element syntax during code generation
 // This is the main entry point for element component resolution
-func (r *SymbolResolver) ResolveElementComponent(fromDir, currentPkg string, componentName string, tf *parser.TemplateFile) (ComponentSignature, error) {
+func (r *symbolResolver) resolveElementComponent(fromDir, currentPkg string, componentName string, tf *parser.TemplateFile) (componentSignature, error) {
 	// First check cache
 	if sig, ok := r.signatures[componentName]; ok {
 		return sig, nil
@@ -100,30 +100,30 @@ func (r *SymbolResolver) ResolveElementComponent(fromDir, currentPkg string, com
 		localName = componentName
 	}
 
-	var sig ComponentSignature
+	var sig componentSignature
 	var err error
 
 	if packagePath != "" {
 		// Cross-package resolution
-		sig, err = r.ResolveComponent(fromDir, packagePath, localName)
+		sig, err = r.resolveComponent(fromDir, packagePath, localName)
 	} else {
 		// Local resolution - try multiple strategies
 		sig, err = r.resolveLocalComponent(fromDir, currentPkg, localName, tf)
 	}
 
 	if err != nil {
-		return ComponentSignature{}, err
+		return componentSignature{}, err
 	}
 
 	// Cache with original component name for future lookups
-	sig.QualifiedName = componentName
+	sig.qualifiedName = componentName
 	r.signatures[componentName] = sig
 
 	return sig, nil
 }
 
 // resolveImportAlias resolves an import alias to its full package path
-func (r *SymbolResolver) resolveImportAlias(alias string, tf *parser.TemplateFile) string {
+func (r *symbolResolver) resolveImportAlias(alias string, tf *parser.TemplateFile) string {
 	for _, node := range tf.Nodes {
 		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
 			if strings.Contains(goExpr.Expression.Value, "import") {
@@ -137,7 +137,7 @@ func (r *SymbolResolver) resolveImportAlias(alias string, tf *parser.TemplateFil
 }
 
 // parseImportPath extracts the import path for a specific alias using Go AST parser
-func (r *SymbolResolver) parseImportPath(goCode, packageAlias string) string {
+func (r *symbolResolver) parseImportPath(goCode, packageAlias string) string {
 	// Try to parse as a complete Go file first
 	fullGoCode := "package main\n" + goCode
 	fset := token.NewFileSet()
@@ -187,7 +187,7 @@ func (r *SymbolResolver) parseImportPath(goCode, packageAlias string) string {
 }
 
 // resolveLocalComponent resolves a local component using package loading
-func (r *SymbolResolver) resolveLocalComponent(fromDir, currentPkg, componentName string, tf *parser.TemplateFile) (ComponentSignature, error) {
+func (r *symbolResolver) resolveLocalComponent(fromDir, currentPkg, componentName string, tf *parser.TemplateFile) (componentSignature, error) {
 	// For dotted names, check if it's a struct method first
 	if strings.Contains(componentName, ".") {
 		if sig, ok := r.resolveStructMethod(componentName, tf, fromDir); ok {
@@ -201,23 +201,23 @@ func (r *SymbolResolver) resolveLocalComponent(fromDir, currentPkg, componentNam
 		var err error
 		currentPkg, err = r.getPackagePathFromDir(fromDir)
 		if err != nil {
-			return ComponentSignature{}, fmt.Errorf("failed to determine package path: %w", err)
+			return componentSignature{}, fmt.Errorf("failed to determine package path: %w", err)
 		}
 	}
 
-	sig, err := r.ResolveComponent(fromDir, currentPkg, componentName)
+	sig, err := r.resolveComponent(fromDir, currentPkg, componentName)
 	if err == nil {
 		return sig, nil
 	}
 
-	return ComponentSignature{}, fmt.Errorf("component %s not found: %w", componentName, err)
+	return componentSignature{}, fmt.Errorf("component %s not found: %w", componentName, err)
 }
 
 // resolveStructMethod resolves struct variable method components like structVar.Method
-func (r *SymbolResolver) resolveStructMethod(componentName string, tf *parser.TemplateFile, fromDir string) (ComponentSignature, bool) {
+func (r *symbolResolver) resolveStructMethod(componentName string, tf *parser.TemplateFile, fromDir string) (componentSignature, bool) {
 	parts := strings.Split(componentName, ".")
 	if len(parts) < 2 {
-		return ComponentSignature{}, false
+		return componentSignature{}, false
 	}
 
 	varName := parts[0]
@@ -226,13 +226,13 @@ func (r *SymbolResolver) resolveStructMethod(componentName string, tf *parser.Te
 	// Ensure package is loaded with overlays
 	pkg, err := r.ensurePackageLoaded(fromDir, "")
 	if err != nil {
-		return ComponentSignature{}, false
+		return componentSignature{}, false
 	}
 
 	// Look for the variable in the package scope
 	obj := pkg.Types.Scope().Lookup(varName)
 	if obj == nil {
-		return ComponentSignature{}, false
+		return componentSignature{}, false
 	}
 
 	// Get the type of the variable
@@ -245,30 +245,30 @@ func (r *SymbolResolver) resolveStructMethod(componentName string, tf *parser.Te
 
 	// Check if it's a named type
 	if _, ok := varType.(*types.Named); !ok {
-		return ComponentSignature{}, false
+		return componentSignature{}, false
 	}
 
 	// Look for the method
 	methodObj, _, _ := types.LookupFieldOrMethod(varType, true, pkg.Types, methodName)
 	if methodObj == nil {
-		return ComponentSignature{}, false
+		return componentSignature{}, false
 	}
 
 	// Extract signature
 	sig, err := r.extractComponentSignature(methodObj, pkg.PkgPath)
 	if err != nil {
-		return ComponentSignature{}, false
+		return componentSignature{}, false
 	}
 
 	// Create alias for future lookups
-	sig.QualifiedName = componentName
+	sig.qualifiedName = componentName
 	r.signatures[componentName] = sig
 	return sig, true
 }
 
-// ResolveComponent resolves a component starting from a specific directory
+// resolveComponent resolves a component starting from a specific directory
 // This is the primary method used during code generation
-func (r *SymbolResolver) ResolveComponent(fromDir, pkgPath, componentName string) (ComponentSignature, error) {
+func (r *symbolResolver) resolveComponent(fromDir, pkgPath, componentName string) (componentSignature, error) {
 	// Generate fully qualified name as cache key
 	var qualifiedName string
 	if pkgPath == "" {
@@ -288,7 +288,7 @@ func (r *SymbolResolver) ResolveComponent(fromDir, pkgPath, componentName string
 	// Use ensurePackageLoaded which properly handles overlays
 	pkg, err := r.ensurePackageLoaded(fromDir, pkgPath)
 	if err != nil {
-		return ComponentSignature{}, fmt.Errorf("failed to load package %s: %w", pkgPath, err)
+		return componentSignature{}, fmt.Errorf("failed to load package %s: %w", pkgPath, err)
 	}
 	// Allow packages with errors if they're compilation errors from generated files
 	if len(pkg.Errors) > 0 {
@@ -302,33 +302,33 @@ func (r *SymbolResolver) ResolveComponent(fromDir, pkgPath, componentName string
 			}
 		}
 		if hasNonTemplErrors {
-			return ComponentSignature{}, fmt.Errorf("package %s has non-generated file errors: %v", pkgPath, pkg.Errors)
+			return componentSignature{}, fmt.Errorf("package %s has non-generated file errors: %v", pkgPath, pkg.Errors)
 		}
 	}
 
 	// Look for the component in the package's type information
 	if pkg.Types == nil {
-		return ComponentSignature{}, fmt.Errorf("no type information available for package %s", pkgPath)
+		return componentSignature{}, fmt.Errorf("no type information available for package %s", pkgPath)
 	}
 
 	obj := pkg.Types.Scope().Lookup(componentName)
 	if obj == nil {
-		return ComponentSignature{}, fmt.Errorf("component %s not found in package %s", componentName, pkgPath)
+		return componentSignature{}, fmt.Errorf("component %s not found in package %s", componentName, pkgPath)
 	}
 
 	// Extract signature using the sophisticated logic from SymbolResolver
 	sig, err := r.extractComponentSignature(obj, pkgPath)
 	if err != nil {
-		return ComponentSignature{}, err
+		return componentSignature{}, err
 	}
 
 	// Set the fully qualified name for caching
 	if qualifiedName == "" {
 		// For local components, use the actual package path we resolved
 		qualifiedName = pkg.PkgPath + "." + componentName
-		sig.QualifiedName = qualifiedName
+		sig.qualifiedName = qualifiedName
 	} else {
-		sig.QualifiedName = qualifiedName
+		sig.qualifiedName = qualifiedName
 	}
 
 	// Cache using fully qualified name
@@ -337,7 +337,7 @@ func (r *SymbolResolver) ResolveComponent(fromDir, pkgPath, componentName string
 }
 
 // generateOverlay creates Go stub code for templ templates
-func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string) string {
+func (r *symbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("package %s\n\n", pkgName))
@@ -424,15 +424,15 @@ func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string
 }
 
 // extractComponentSignature extracts component signature
-func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath string) (ComponentSignature, error) {
-	var paramInfo []ParameterInfo
+func (r *symbolResolver) extractComponentSignature(obj types.Object, pkgPath string) (componentSignature, error) {
+	var paramInfo []parameterInfo
 	var isStruct, isPointerRecv bool
 
 	// The component can be either a function or a type that implements templ.Component
 	if fn, ok := obj.(*types.Func); ok {
 		sig := fn.Type().(*types.Signature)
 		params := sig.Params()
-		paramInfo = make([]ParameterInfo, 0, params.Len())
+		paramInfo = make([]parameterInfo, 0, params.Len())
 
 		for i := 0; i < params.Len(); i++ {
 			param := params.At(i)
@@ -441,30 +441,30 @@ func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath str
 	} else {
 		typeName, ok := obj.(*types.TypeName)
 		if !ok {
-			return ComponentSignature{}, fmt.Errorf("%s is neither a function nor a type", obj.Name())
+			return componentSignature{}, fmt.Errorf("%s is neither a function nor a type", obj.Name())
 		}
 
 		isStruct, isPointerRecv = r.implementsComponent(typeName.Type(), typeName.Pkg())
 		if !isStruct {
-			return ComponentSignature{}, fmt.Errorf("%s does not implement templ.Component interface", obj.Name())
+			return componentSignature{}, fmt.Errorf("%s does not implement templ.Component interface", obj.Name())
 		}
 
 		// Extract struct fields for struct components
 		paramInfo = r.extractStructFieldsWithTypeAnalysis(typeName.Type())
 	}
 
-	return ComponentSignature{
-		PackagePath:   pkgPath,
-		Name:          obj.Name(),
-		Parameters:    paramInfo,
-		IsStruct:      isStruct,
-		IsPointerRecv: isPointerRecv,
+	return componentSignature{
+		packagePath:   pkgPath,
+		name:          obj.Name(),
+		parameters:    paramInfo,
+		isStruct:      isStruct,
+		isPointerRecv: isPointerRecv,
 	}, nil
 }
 
-// RegisterTemplateOverlay registers a template file for symbol resolution by creating a Go overlay
+// registerTemplOverlay registers a template file for symbol resolution by creating a Go overlay
 // This method generates an overlay that makes the templ file available to the Go package loader
-func (r *SymbolResolver) RegisterTemplateOverlay(tf *parser.TemplateFile, fileName string) error {
+func (r *symbolResolver) registerTemplOverlay(tf *parser.TemplateFile, fileName string) error {
 	// Ensure fileName is absolute first
 	absFileName := fileName
 	if !filepath.IsAbs(fileName) {
@@ -500,7 +500,7 @@ func (r *SymbolResolver) RegisterTemplateOverlay(tf *parser.TemplateFile, fileNa
 
 // ensurePackageLoaded lazily loads the package with full type information
 // It can load either by directory (pattern ".") or by package path
-func (r *SymbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*packages.Package, error) {
+func (r *symbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*packages.Package, error) {
 	// Determine the pattern to use
 	if pattern == "" {
 		pattern = "."
@@ -555,20 +555,20 @@ func (r *SymbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*p
 	return pkg, nil
 }
 
-// GetLocalTemplate returns a local template signature by name
+// getLocalTemplate returns a local template signature by name
 // This method is for backward compatibility - prefer using fully qualified names
-func (r *SymbolResolver) GetLocalTemplate(name string) (ComponentSignature, bool) {
+func (r *symbolResolver) getLocalTemplate(name string) (componentSignature, bool) {
 	// Check signatures cache
 	for qualifiedName, sig := range r.signatures {
 		if strings.HasSuffix(qualifiedName, "."+name) || qualifiedName == name {
 			return sig, true
 		}
 	}
-	return ComponentSignature{}, false
+	return componentSignature{}, false
 }
 
-// AddLocalTemplateAlias adds an alias for a local template
-func (r *SymbolResolver) AddLocalTemplateAlias(alias, target string) {
+// addLocalTemplateAlias adds an alias for a local template
+func (r *symbolResolver) addLocalTemplateAlias(alias, target string) {
 	// Find the target signature
 	for qualifiedName, sig := range r.signatures {
 		if strings.HasSuffix(qualifiedName, "."+target) {
@@ -584,8 +584,8 @@ func (r *SymbolResolver) AddLocalTemplateAlias(alias, target string) {
 	}
 }
 
-// GetAllLocalTemplateNames returns all local template names for debugging
-func (r *SymbolResolver) GetAllLocalTemplateNames() []string {
+// getAllLocalTemplateNames returns all local template names for debugging
+func (r *symbolResolver) getAllLocalTemplateNames() []string {
 	var names []string
 	for qualifiedName := range r.signatures {
 		// Extract just the component name from the qualified name
@@ -597,23 +597,23 @@ func (r *SymbolResolver) GetAllLocalTemplateNames() []string {
 	return names
 }
 
-// ResolveExpression resolves an expression with context awareness
-func (r *SymbolResolver) ResolveExpression(expr string, ctx *GeneratorContext, fromDir string) (*TypeInfo, error) {
+// resolveExpression resolves an expression with context awareness
+func (r *symbolResolver) resolveExpression(expr string, ctx *generatorContext, fromDir string) (*symbolTypeInfo, error) {
 	expr = strings.TrimSpace(expr)
 
 	// First check local scopes (for loops, if statements, etc.)
-	for i := len(ctx.LocalScopes) - 1; i >= 0; i-- {
-		if typeInfo, ok := ctx.LocalScopes[i].Variables[expr]; ok {
+	for i := len(ctx.localScopes) - 1; i >= 0; i-- {
+		if typeInfo, ok := ctx.localScopes[i].variables[expr]; ok {
 			return typeInfo, nil
 		}
 	}
 
 	// Then check template parameters if we're in a template
-	if ctx.CurrentTemplate != nil {
+	if ctx.currentTemplate != nil {
 		// Load the current package to get proper type info
 		pkg, err := r.ensurePackageLoaded(fromDir, "")
 		if err == nil {
-			tmplName := getTemplateName(ctx.CurrentTemplate)
+			tmplName := getTemplateName(ctx.currentTemplate)
 			// Look up the template function in the package
 			obj := pkg.Types.Scope().Lookup(tmplName)
 			if obj != nil {
@@ -624,15 +624,15 @@ func (r *SymbolResolver) ResolveExpression(expr string, ctx *GeneratorContext, f
 						param := params.At(i)
 						if param.Name() == expr {
 							paramInfo := r.analyzeParameterType(param.Name(), param.Type())
-							return &TypeInfo{
-								FullType:     paramInfo.Type,
-								IsComponent:  paramInfo.IsComponent,
-								IsAttributer: paramInfo.IsAttributer,
-								IsPointer:    paramInfo.IsPointer,
-								IsSlice:      paramInfo.IsSlice,
-								IsMap:        paramInfo.IsMap,
-								IsString:     paramInfo.IsString,
-								IsBool:       paramInfo.IsBool,
+							return &symbolTypeInfo{
+								fullType:     paramInfo.typ,
+								isComponent:  paramInfo.isComponent,
+								isAttributer: paramInfo.isAttributer,
+								isPointer:    paramInfo.isPointer,
+								isSlice:      paramInfo.isSlice,
+								isMap:        paramInfo.isMap,
+								isString:     paramInfo.isString,
+								isBool:       paramInfo.isBool,
 							}, nil
 						}
 					}
@@ -647,15 +647,15 @@ func (r *SymbolResolver) ResolveExpression(expr string, ctx *GeneratorContext, f
 		obj := pkg.Types.Scope().Lookup(expr)
 		if obj != nil {
 			typeInfo := r.analyzeParameterType(obj.Name(), obj.Type())
-			return &TypeInfo{
-				FullType:     typeInfo.Type,
-				IsComponent:  typeInfo.IsComponent,
-				IsAttributer: typeInfo.IsAttributer,
-				IsPointer:    typeInfo.IsPointer,
-				IsSlice:      typeInfo.IsSlice,
-				IsMap:        typeInfo.IsMap,
-				IsString:     typeInfo.IsString,
-				IsBool:       typeInfo.IsBool,
+			return &symbolTypeInfo{
+				fullType:     typeInfo.typ,
+				isComponent:  typeInfo.isComponent,
+				isAttributer: typeInfo.isAttributer,
+				isPointer:    typeInfo.isPointer,
+				isSlice:      typeInfo.isSlice,
+				isMap:        typeInfo.isMap,
+				isString:     typeInfo.isString,
+				isBool:       typeInfo.isBool,
 			}, nil
 		}
 	}
@@ -663,19 +663,19 @@ func (r *SymbolResolver) ResolveExpression(expr string, ctx *GeneratorContext, f
 	return nil, fmt.Errorf("symbol %s not found in current context", expr)
 }
 
-// AddComponentSignature adds a resolved component signature for code generation
-func (r *SymbolResolver) AddComponentSignature(sig ComponentSignature) {
-	r.signatures[sig.QualifiedName] = sig
+// addComponentSignature adds a resolved component signature for code generation
+func (r *symbolResolver) addComponentSignature(sig componentSignature) {
+	r.signatures[sig.qualifiedName] = sig
 }
 
-// GetComponentSignature returns a component signature by qualified name
-func (r *SymbolResolver) GetComponentSignature(qualifiedName string) (ComponentSignature, bool) {
+// getComponentSignature returns a component signature by qualified name
+func (r *symbolResolver) getComponentSignature(qualifiedName string) (componentSignature, bool) {
 	sig, ok := r.signatures[qualifiedName]
 	return sig, ok
 }
 
 // astTypeToString converts AST type expressions to their string representation
-func (r *SymbolResolver) astTypeToString(expr ast.Expr) string {
+func (r *symbolResolver) astTypeToString(expr ast.Expr) string {
 	switch t := expr.(type) {
 	case *ast.Ident:
 		// Basic types like string, int, bool, etc.
@@ -710,7 +710,7 @@ func (r *SymbolResolver) astTypeToString(expr ast.Expr) string {
 
 // implementsComponent checks if a type implements the templ.Component interface using full type information
 // Returns (implements, isPointerReceiver)
-func (r *SymbolResolver) implementsComponent(t types.Type, pkg *types.Package) (bool, bool) {
+func (r *symbolResolver) implementsComponent(t types.Type, pkg *types.Package) (bool, bool) {
 	method, _, _ := types.LookupFieldOrMethod(t, true, pkg, "Render")
 	if method == nil {
 		return false, false
@@ -756,7 +756,7 @@ func (r *SymbolResolver) implementsComponent(t types.Type, pkg *types.Package) (
 }
 
 // analyzeParameterType performs comprehensive type analysis for a parameter
-func (r *SymbolResolver) analyzeParameterType(name string, t types.Type) ParameterInfo {
+func (r *symbolResolver) analyzeParameterType(name string, t types.Type) parameterInfo {
 	typeStr := t.String()
 
 	// Analyze the type for various characteristics
@@ -808,21 +808,21 @@ func (r *SymbolResolver) analyzeParameterType(name string, t types.Type) Paramet
 		isComponent = true
 	}
 
-	return ParameterInfo{
-		Name:         name,
-		Type:         typeStr,
-		IsComponent:  isComponent,
-		IsAttributer: isAttributer,
-		IsPointer:    isPointer,
-		IsSlice:      isSlice,
-		IsMap:        isMap,
-		IsString:     isString,
-		IsBool:       isBool,
+	return parameterInfo{
+		name:         name,
+		typ:          typeStr,
+		isComponent:  isComponent,
+		isAttributer: isAttributer,
+		isPointer:    isPointer,
+		isSlice:      isSlice,
+		isMap:        isMap,
+		isString:     isString,
+		isBool:       isBool,
 	}
 }
 
 // implementsComponentInterface checks if a type implements templ.Component interface
-func (r *SymbolResolver) implementsComponentInterface(t types.Type) bool {
+func (r *symbolResolver) implementsComponentInterface(t types.Type) bool {
 	// Look for Render(context.Context, io.Writer) error method
 	method, _, _ := types.LookupFieldOrMethod(t, true, nil, "Render")
 	if method == nil {
@@ -861,14 +861,14 @@ func (r *SymbolResolver) implementsComponentInterface(t types.Type) bool {
 }
 
 // implementsAttributerInterface checks if a type implements templ.Attributer interface
-func (r *SymbolResolver) implementsAttributerInterface(t types.Type) bool {
+func (r *symbolResolver) implementsAttributerInterface(t types.Type) bool {
 	// Check for both qualified and unqualified templ.Attributer
 	typeStr := t.String()
 	return typeStr == "templ.Attributer" || typeStr == "github.com/a-h/templ.Attributer"
 }
 
 // extractStructFieldsWithTypeAnalysis extracts exported struct fields with rich type analysis
-func (r *SymbolResolver) extractStructFieldsWithTypeAnalysis(t types.Type) []ParameterInfo {
+func (r *symbolResolver) extractStructFieldsWithTypeAnalysis(t types.Type) []parameterInfo {
 	var structType *types.Struct
 	switch underlying := t.Underlying().(type) {
 	case *types.Struct:
@@ -877,7 +877,7 @@ func (r *SymbolResolver) extractStructFieldsWithTypeAnalysis(t types.Type) []Par
 		return nil
 	}
 
-	var fields []ParameterInfo
+	var fields []parameterInfo
 	for i := 0; i < structType.NumFields(); i++ {
 		field := structType.Field(i)
 		if field.Exported() {
@@ -889,7 +889,7 @@ func (r *SymbolResolver) extractStructFieldsWithTypeAnalysis(t types.Type) []Par
 }
 
 // getPackagePathFromDir determines the package path from a directory
-func (r *SymbolResolver) getPackagePathFromDir(dir string) (string, error) {
+func (r *symbolResolver) getPackagePathFromDir(dir string) (string, error) {
 	// Check if we already have this package loaded in cache
 	if pkg, ok := r.packageCache[dir]; ok {
 		return pkg.PkgPath, nil
@@ -943,82 +943,82 @@ func getTemplateName(tmpl *parser.HTMLTemplate) string {
 	return exprValue
 }
 
-// GeneratorContext tracks position in AST during code generation
-type GeneratorContext struct {
-	CurrentTemplate *parser.HTMLTemplate // Current template we're generating
-	ASTPath         []parser.Node        // Path from root to current node
-	LocalScopes     []LocalScope         // Stack of local scopes
+// generatorContext tracks position in AST during code generation
+type generatorContext struct {
+	currentTemplate *parser.HTMLTemplate // Current template we're generating
+	astPath         []parser.Node        // Path from root to current node
+	localScopes     []localScope         // Stack of local scopes
 }
 
-// LocalScope represents a scope created by an AST node
-type LocalScope struct {
-	Node      parser.Node          // The AST node that created this scope
-	Variables map[string]*TypeInfo // Variables defined in this scope
+// localScope represents a scope created by an AST node
+type localScope struct {
+	node      parser.Node                // The AST node that created this scope
+	variables map[string]*symbolTypeInfo // Variables defined in this scope
 }
 
 // newGeneratorContext creates a new generator context
-func newGeneratorContext() *GeneratorContext {
-	return &GeneratorContext{
-		ASTPath:     []parser.Node{},
-		LocalScopes: []LocalScope{},
+func newGeneratorContext() *generatorContext {
+	return &generatorContext{
+		astPath:     []parser.Node{},
+		localScopes: []localScope{},
 	}
 }
 
-// PushScope creates a new scope
-func (ctx *GeneratorContext) PushScope(node parser.Node) {
-	scope := LocalScope{
-		Node:      node,
-		Variables: make(map[string]*TypeInfo),
+// pushScope creates a new scope
+func (ctx *generatorContext) pushScope(node parser.Node) {
+	scope := localScope{
+		node:      node,
+		variables: make(map[string]*symbolTypeInfo),
 	}
-	ctx.LocalScopes = append(ctx.LocalScopes, scope)
+	ctx.localScopes = append(ctx.localScopes, scope)
 }
 
-// PopScope removes the current scope
-func (ctx *GeneratorContext) PopScope() {
-	if len(ctx.LocalScopes) > 0 {
-		ctx.LocalScopes = ctx.LocalScopes[:len(ctx.LocalScopes)-1]
-	}
-}
-
-// AddVariable adds a variable to the current scope
-func (ctx *GeneratorContext) AddVariable(name string, typeInfo *TypeInfo) {
-	if len(ctx.LocalScopes) > 0 {
-		currentScope := &ctx.LocalScopes[len(ctx.LocalScopes)-1]
-		currentScope.Variables[name] = typeInfo
+// popScope removes the current scope
+func (ctx *generatorContext) popScope() {
+	if len(ctx.localScopes) > 0 {
+		ctx.localScopes = ctx.localScopes[:len(ctx.localScopes)-1]
 	}
 }
 
-// EnterNode adds a node to the AST path
-func (ctx *GeneratorContext) EnterNode(node parser.Node) {
-	ctx.ASTPath = append(ctx.ASTPath, node)
-}
-
-// ExitNode removes the current node from the AST path
-func (ctx *GeneratorContext) ExitNode() {
-	if len(ctx.ASTPath) > 0 {
-		ctx.ASTPath = ctx.ASTPath[:len(ctx.ASTPath)-1]
+// addVariable adds a variable to the current scope
+func (ctx *generatorContext) addVariable(name string, typeInfo *symbolTypeInfo) {
+	if len(ctx.localScopes) > 0 {
+		currentScope := &ctx.localScopes[len(ctx.localScopes)-1]
+		currentScope.variables[name] = typeInfo
 	}
 }
 
-// SetCurrentTemplate sets the current template being generated
-func (ctx *GeneratorContext) SetCurrentTemplate(tmpl *parser.HTMLTemplate) {
-	ctx.CurrentTemplate = tmpl
+// enterNode adds a node to the AST path
+func (ctx *generatorContext) enterNode(node parser.Node) {
+	ctx.astPath = append(ctx.astPath, node)
+}
+
+// exitNode removes the current node from the AST path
+func (ctx *generatorContext) exitNode() {
+	if len(ctx.astPath) > 0 {
+		ctx.astPath = ctx.astPath[:len(ctx.astPath)-1]
+	}
+}
+
+// setCurrentTemplate sets the current template being generated
+func (ctx *generatorContext) setCurrentTemplate(tmpl *parser.HTMLTemplate) {
+	ctx.currentTemplate = tmpl
 	// When entering a template, we don't push a new scope here
 	// The parameters are added separately by the caller
 }
 
-// ClearCurrentTemplate clears the current template
-func (ctx *GeneratorContext) ClearCurrentTemplate() {
-	if ctx.CurrentTemplate != nil {
-		ctx.PopScope() // Remove template parameter scope
-		ctx.CurrentTemplate = nil
+// clearCurrentTemplate clears the current template
+func (ctx *generatorContext) clearCurrentTemplate() {
+	if ctx.currentTemplate != nil {
+		ctx.popScope() // Remove template parameter scope
+		ctx.currentTemplate = nil
 	}
 }
 
 // extractForLoopVariables extracts variables from a for expression using the AST
 // e.g., "for i, item := range items" -> ["i", "item"]
-func extractForLoopVariables(expr parser.Expression) map[string]*TypeInfo {
-	vars := make(map[string]*TypeInfo)
+func extractForLoopVariables(expr parser.Expression) map[string]*symbolTypeInfo {
+	vars := make(map[string]*symbolTypeInfo)
 
 	// Check if we have an AST node
 	if expr.Stmt == nil {
@@ -1032,16 +1032,16 @@ func extractForLoopVariables(expr parser.Expression) map[string]*TypeInfo {
 		if stmt.Key != nil {
 			if ident, ok := stmt.Key.(*ast.Ident); ok && ident.Name != "_" {
 				// Key is usually int for slices/arrays, string for maps
-				vars[ident.Name] = &TypeInfo{
-					FullType: "int", // Simplified - would need type analysis for maps
+				vars[ident.Name] = &symbolTypeInfo{
+					fullType: "int", // Simplified - would need type analysis for maps
 				}
 			}
 		}
 		if stmt.Value != nil {
 			if ident, ok := stmt.Value.(*ast.Ident); ok && ident.Name != "_" {
 				// Value type is unknown without more context
-				vars[ident.Name] = &TypeInfo{
-					FullType: "interface{}",
+				vars[ident.Name] = &symbolTypeInfo{
+					fullType: "interface{}", // impossible to determine exact type without analysis
 				}
 			}
 		}
@@ -1052,8 +1052,8 @@ func extractForLoopVariables(expr parser.Expression) map[string]*TypeInfo {
 			if assignStmt, ok := stmt.Init.(*ast.AssignStmt); ok {
 				for _, lhs := range assignStmt.Lhs {
 					if ident, ok := lhs.(*ast.Ident); ok {
-						vars[ident.Name] = &TypeInfo{
-							FullType: "int", // Common case for loop counters
+						vars[ident.Name] = &symbolTypeInfo{
+							fullType: "int", // Common case for loop counters
 						}
 					}
 				}
@@ -1065,8 +1065,8 @@ func extractForLoopVariables(expr parser.Expression) map[string]*TypeInfo {
 }
 
 // extractForLoopVariablesFallback is the fallback implementation using string parsing
-func extractForLoopVariablesFallback(exprValue string) map[string]*TypeInfo {
-	vars := make(map[string]*TypeInfo)
+func extractForLoopVariablesFallback(exprValue string) map[string]*symbolTypeInfo {
+	vars := make(map[string]*symbolTypeInfo)
 	exprStr := strings.TrimSpace(exprValue)
 
 	// Handle "for i, v := range expr" pattern
@@ -1080,12 +1080,12 @@ func extractForLoopVariablesFallback(exprValue string) map[string]*TypeInfo {
 				varName = strings.TrimSpace(varName)
 				if varName != "" && varName != "_" {
 					if i == 0 {
-						vars[varName] = &TypeInfo{
-							FullType: "int",
+						vars[varName] = &symbolTypeInfo{
+							fullType: "int",
 						}
 					} else {
-						vars[varName] = &TypeInfo{
-							FullType: "interface{}",
+						vars[varName] = &symbolTypeInfo{
+							fullType: "interface{}",
 						}
 					}
 				}
@@ -1102,8 +1102,8 @@ func extractForLoopVariablesFallback(exprValue string) map[string]*TypeInfo {
 			if len(assignParts) >= 2 {
 				varName := strings.TrimSpace(assignParts[0])
 				if varName != "" {
-					vars[varName] = &TypeInfo{
-						FullType: "int",
+					vars[varName] = &symbolTypeInfo{
+						fullType: "int",
 					}
 				}
 			}
@@ -1115,8 +1115,8 @@ func extractForLoopVariablesFallback(exprValue string) map[string]*TypeInfo {
 
 // extractIfConditionVariables extracts variables from if condition using the AST
 // e.g., "if err := doSomething(); err != nil" -> ["err"]
-func extractIfConditionVariables(expr parser.Expression) map[string]*TypeInfo {
-	vars := make(map[string]*TypeInfo)
+func extractIfConditionVariables(expr parser.Expression) map[string]*symbolTypeInfo {
+	vars := make(map[string]*symbolTypeInfo)
 
 	// Check if we have an AST node
 	if expr.Stmt == nil {
@@ -1131,8 +1131,8 @@ func extractIfConditionVariables(expr parser.Expression) map[string]*TypeInfo {
 				for _, lhs := range assignStmt.Lhs {
 					if ident, ok := lhs.(*ast.Ident); ok && ident.Name != "_" {
 						// Without type analysis, we can't know the exact type
-						vars[ident.Name] = &TypeInfo{
-							FullType: "interface{}",
+						vars[ident.Name] = &symbolTypeInfo{
+							fullType: "interface{}",
 						}
 					}
 				}
@@ -1144,8 +1144,8 @@ func extractIfConditionVariables(expr parser.Expression) map[string]*TypeInfo {
 }
 
 // extractIfConditionVariablesFallback is the fallback implementation using string parsing
-func extractIfConditionVariablesFallback(exprValue string) map[string]*TypeInfo {
-	vars := make(map[string]*TypeInfo)
+func extractIfConditionVariablesFallback(exprValue string) map[string]*symbolTypeInfo {
+	vars := make(map[string]*symbolTypeInfo)
 	exprStr := strings.TrimSpace(exprValue)
 
 	// Handle short variable declaration in if condition
@@ -1158,8 +1158,8 @@ func extractIfConditionVariablesFallback(exprValue string) map[string]*TypeInfo 
 				if len(assignParts) >= 2 {
 					varName := strings.TrimSpace(assignParts[0])
 					if varName != "" && varName != "_" {
-						vars[varName] = &TypeInfo{
-							FullType: "interface{}",
+						vars[varName] = &symbolTypeInfo{
+							fullType: "interface{}",
 						}
 					}
 				}

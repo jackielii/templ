@@ -81,9 +81,8 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 	eg.Go(func() (err error) {
 		// Determine the correct working directory for symbol resolution
 		var opts []generator.GenerateOpt
-		// Working directory detection is now handled automatically by the unified resolver
 		// Skip element component resolution for imports processing
-		opts = append(opts, generator.WithSkipElementComponentResolution())
+		opts = append(opts, generator.WithSkipSymbolResolution())
 
 		if _, err := generator.Generate(t, gw, opts...); err != nil {
 			return fmt.Errorf("failed to generate go code: %w", err)

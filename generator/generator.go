@@ -60,11 +60,11 @@ func WithSkipCodeGeneratedComment() GenerateOpt {
 	}
 }
 
-// WithSkipElementComponentResolution skips element component resolution.
+// WithSkipSymbolResolution skips element component resolution.
 // This is useful for formatting where component resolution is not needed.
-func WithSkipElementComponentResolution() GenerateOpt {
+func WithSkipSymbolResolution() GenerateOpt {
 	return func(g *generator) error {
-		g.options.SkipElementComponentResolution = true
+		g.options.SkipSymbolResolution = true
 		return nil
 	}
 }
@@ -85,8 +85,8 @@ type GeneratorOptions struct {
 	SkipCodeGeneratedComment bool
 	// GeneratedDate to include as a comment.
 	GeneratedDate string
-	// SkipElementComponentResolution skips element component resolution (for formatting).
-	SkipElementComponentResolution bool
+	// SkipSymbolResolution disables element component resolution (for formatting).
+	SkipSymbolResolution bool
 }
 
 // HasChanged returns true if the generated file should be written to disk, and therefore, also
@@ -150,11 +150,11 @@ type generator struct {
 	childrenVar string
 
 	options        GeneratorOptions
-	symbolResolver SymbolResolver
+	symbolResolver symbolResolver
 	diagnostics    []parser.Diagnostic
 
 	// context tracks the current position in the AST for symbol resolution
-	context *GeneratorContext
+	context *generatorContext
 }
 
 func (g *generator) generate() (err error) {
@@ -501,17 +501,17 @@ func (g *generator) writeTemplate(nodeIdx int, t *parser.HTMLTemplate) error {
 	defer g.context.ClearCurrentTemplate()
 
 	// Add template parameters to scope
-	if sig, ok := g.symbolResolver.GetLocalTemplate(g.getTemplateName(t)); ok {
-		for _, param := range sig.Parameters {
-			g.context.AddVariable(param.Name, &TypeInfo{
-				FullType:     param.Type,
-				IsComponent:  param.IsComponent,
-				IsAttributer: param.IsAttributer,
-				IsPointer:    param.IsPointer,
-				IsSlice:      param.IsSlice,
-				IsMap:        param.IsMap,
-				IsString:     param.IsString,
-				IsBool:       param.IsBool,
+	if sig, ok := g.symbolResolver.getLocalTemplate(g.getTemplateName(t)); ok {
+		for _, param := range sig.parameters {
+			g.context.addVariable(param.name, &symbolTypeInfo{
+				fullType:     param.typ,
+				isComponent:  param.isComponent,
+				isAttributer: param.isAttributer,
+				isPointer:    param.isPointer,
+				isSlice:      param.isSlice,
+				isMap:        param.isMap,
+				isString:     param.isString,
+				isBool:       param.isBool,
 			})
 		}
 	}
@@ -779,13 +779,13 @@ func (g *generator) writeIfExpression(indentLevel int, n *parser.IfExpression, n
 	var r parser.Range
 
 	// Push new scope for the if statement
-	g.context.PushScope(n)
-	defer g.context.PopScope()
+	g.context.pushScope(n)
+	defer g.context.popScope()
 
 	// Extract and add condition variables to scope
 	condVars := extractIfConditionVariables(n.Expression)
 	for name, typeInfo := range condVars {
-		g.context.AddVariable(name, typeInfo)
+		g.context.addVariable(name, typeInfo)
 	}
 
 	// if
@@ -998,13 +998,13 @@ func (g *generator) writeForExpression(indentLevel int, n *parser.ForExpression,
 	var r parser.Range
 
 	// Push new scope for the for loop
-	g.context.PushScope(n)
-	defer g.context.PopScope()
+	g.context.pushScope(n)
+	defer g.context.popScope()
 
 	// Extract and add loop variables to scope
 	loopVars := extractForLoopVariables(n.Expression)
 	for name, typeInfo := range loopVars {
-		g.context.AddVariable(name, typeInfo)
+		g.context.addVariable(name, typeInfo)
 	}
 
 	// for
@@ -1748,8 +1748,8 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 	// In this block, we want to support { child } expression for templ.Component variables.
 	// Try to resolve the expression using context
 	exprValue := strings.TrimSpace(e.Value)
-	typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, g.context, g.currentFileDir())
-	if err == nil && typeInfo.IsComponent {
+	typeInfo, err := g.symbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
+	if err == nil && typeInfo.isComponent {
 		// This is a component, use call template expression logic
 		return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})
 	}

@@ -77,19 +77,19 @@ func (g *generator) writeBlockElementComponent(indentLevel int, n *parser.Elemen
 type elementComponentAttributes struct {
 	keys      []parser.ConstantAttributeKey
 	attrs     []parser.Attribute
-	params    []ParameterInfo
+	params    []parameterInfo
 	restAttrs []parser.Attribute
-	restParam ParameterInfo
+	restParam parameterInfo
 }
 
-func (g *generator) writeElementComponentAttrVars(indentLevel int, sigs ComponentSignature, n *parser.ElementComponent) ([]string, error) {
+func (g *generator) writeElementComponentAttrVars(indentLevel int, sigs componentSignature, n *parser.ElementComponent) ([]string, error) {
 	orderedAttrs, err := g.reorderElementComponentAttributes(sigs, n)
 	if err != nil {
 		return nil, err
 	}
 
 	var restVarName string
-	if orderedAttrs.restParam.Name != "" {
+	if orderedAttrs.restParam.name != "" {
 		restVarName = g.createVariableName()
 		if _, err = g.w.WriteIndent(indentLevel, "var "+restVarName+" = templ.OrderedAttributes{}\n"); err != nil {
 			return nil, err
@@ -106,7 +106,7 @@ func (g *generator) writeElementComponentAttrVars(indentLevel int, sigs Componen
 		res[i] = value
 	}
 
-	if orderedAttrs.restParam.Name != "" {
+	if orderedAttrs.restParam.name != "" {
 		for _, attr := range orderedAttrs.restAttrs {
 			_ = g.writeElementComponentArgRestVar(indentLevel, restVarName, attr)
 		}
@@ -115,7 +115,7 @@ func (g *generator) writeElementComponentAttrVars(indentLevel int, sigs Componen
 	return res, nil
 }
 
-func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n *parser.ElementComponent) (elementComponentAttributes, error) {
+func (g *generator) reorderElementComponentAttributes(sig componentSignature, n *parser.ElementComponent) (elementComponentAttributes, error) {
 	rest := make([]parser.Attribute, 0)
 	attrMap := make(map[string]parser.Attribute)
 	keyMap := make(map[string]parser.ConstantAttributeKey)
@@ -124,7 +124,7 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 		if ok {
 			key, ok := keyed.AttributeKey().(parser.ConstantAttributeKey)
 			if ok {
-				if slices.ContainsFunc(sig.Parameters, func(p ParameterInfo) bool { return p.Name == key.Name }) {
+				if slices.ContainsFunc(sig.parameters, func(p parameterInfo) bool { return p.name == key.Name }) {
 					// Element component should only works with const key element.
 					attrMap[key.Name] = attr
 					keyMap[key.Name] = key
@@ -135,10 +135,10 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 		rest = append(rest, attr)
 	}
 
-	params := sig.Parameters
+	params := sig.parameters
 	// We support an optional last parameter that is of type templ.Attributer.
-	var attrParam ParameterInfo
-	if len(params) > 0 && params[len(params)-1].IsAttributer {
+	var attrParam parameterInfo
+	if len(params) > 0 && params[len(params)-1].isAttributer {
 		attrParam = params[len(params)-1]
 		params = params[:len(params)-1]
 	}
@@ -146,13 +146,13 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 	keys := make([]parser.ConstantAttributeKey, len(params))
 	for i, param := range params {
 		var ok bool
-		ordered[i], ok = attrMap[param.Name]
+		ordered[i], ok = attrMap[param.name]
 		if !ok {
-			return elementComponentAttributes{}, fmt.Errorf("missing required attribute %s for component %s", param.Name, n.Name)
+			return elementComponentAttributes{}, fmt.Errorf("missing required attribute %s for component %s", param.name, n.Name)
 		}
-		keys[i], ok = keyMap[param.Name]
+		keys[i], ok = keyMap[param.name]
 		if !ok {
-			return elementComponentAttributes{}, fmt.Errorf("missing required key for attribute %s in component %s", param.Name, n.Name)
+			return elementComponentAttributes{}, fmt.Errorf("missing required key for attribute %s in component %s", param.name, n.Name)
 		}
 	}
 	return elementComponentAttributes{
@@ -164,7 +164,7 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 	}, nil
 }
 
-func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr parser.Attribute, param ParameterInfo) (varName string, err error) {
+func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr parser.Attribute, param parameterInfo) (varName string, err error) {
 	switch attr := attr.(type) {
 	case *parser.InlineComponentAttribute:
 		return g.writeChildrenComponent(indentLevel, attr.Children)
@@ -174,8 +174,8 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 		exprValue := strings.TrimSpace(attr.Expression.Value)
 
 		// Try to resolve the expression type using context
-		typeInfo, err := g.symbolResolver.ResolveExpression(exprValue, g.context, g.currentFileDir())
-		if err == nil && typeInfo.IsComponent {
+		typeInfo, err := g.symbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
+		if err == nil && typeInfo.isComponent {
 			// We know for sure it's a component, pass it directly
 			return exprValue, nil
 		}
@@ -245,8 +245,8 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 	}
 }
 
-func (g *generator) writeElementComponentArgNewVar(indentLevel int, attr parser.Attribute, param ParameterInfo) (string, error) {
-	if param.IsComponent {
+func (g *generator) writeElementComponentArgNewVar(indentLevel int, attr parser.Attribute, param parameterInfo) (string, error) {
+	if param.isComponent {
 		return g.writeElementComponentAttrComponent(indentLevel, attr, param)
 	}
 
@@ -459,25 +459,25 @@ func (g *generator) writeRestAppend(indentLevel int, restVarName string, key str
 }
 
 func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser.ElementComponent) (err error) {
-	var sigs ComponentSignature
+	var sigs componentSignature
 
-	if g.options.SkipElementComponentResolution {
+	if g.options.SkipSymbolResolution {
 		// For formatting, create a dummy signature that allows generation to proceed
-		sigs = ComponentSignature{
-			Name:          n.Name,
-			QualifiedName: n.Name,
-			IsStruct:      false,             // Treat as function for simplicity
-			Parameters:    []ParameterInfo{}, // Empty parameters
+		sigs = componentSignature{
+			name:          n.Name,
+			qualifiedName: n.Name,
+			isStruct:      false,             // Treat as function for simplicity
+			parameters:    []parameterInfo{}, // Empty parameters
 		}
 	} else {
 		// Ensure the template overlay is registered (this is a no-op if already registered)
-		if err = g.symbolResolver.RegisterTemplateOverlay(g.tf, g.options.FileName); err != nil {
+		if err = g.symbolResolver.registerTemplOverlay(g.tf, g.options.FileName); err != nil {
 			return fmt.Errorf("failed to register template overlay: %w", err)
 		}
 
 		// Try to resolve component on-demand
 		currentPkgPath, _ := g.getCurrentPackagePath()
-		sigs, err = g.symbolResolver.ResolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
+		sigs, err = g.symbolResolver.resolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
 		if err != nil {
 			return fmt.Errorf("component %s at %s:%d:%d: %w", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col, err)
 		}
@@ -495,13 +495,13 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 	var r parser.Range
 
 	// For types that implement Component, use appropriate struct literal syntax
-	if sigs.IsStruct {
+	if sigs.isStruct {
 		// (ComponentType{Field1: value1, Field2: value2}) or (&ComponentType{...})
 		if _, err = g.w.Write("("); err != nil {
 			return err
 		}
 
-		if sigs.IsPointerRecv {
+		if sigs.isPointerRecv {
 			if _, err = g.w.Write("&"); err != nil {
 				return err
 			}
@@ -523,8 +523,8 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 				}
 			}
 			// Write field name: value
-			if i < len(sigs.Parameters) {
-				if _, err = g.w.Write(sigs.Parameters[i].Name); err != nil {
+			if i < len(sigs.parameters) {
+				if _, err = g.w.Write(sigs.parameters[i].name); err != nil {
 					return err
 				}
 				if _, err = g.w.Write(": "); err != nil {
