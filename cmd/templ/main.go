@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
+	"slices"
 	"syscall"
 
 	"github.com/a-h/templ"
@@ -42,6 +44,16 @@ commands:
 `
 
 func run(stdin io.Reader, stdout, stderr io.Writer, args []string) (code int) {
+	if len(args) > 2 && (args[1] == "-cpuprofile" || args[1] == "--cpuprofile") {
+		cpuProfile := args[2]
+		args = slices.Delete(args, 1, 3)
+		stop, err := profile(cpuProfile)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, "Error starting CPU profile:", err)
+			return 1 // EX_SOFTWARE
+		}
+		defer stop()
+	}
 	if len(args) < 2 {
 		_, _ = fmt.Fprint(stderr, usageText)
 		return 64 // EX_USAGE
@@ -223,6 +235,8 @@ func generateCmd(stdout, stderr io.Writer, args []string) (code int) {
 	logLevelFlag := cmd.String("log-level", "info", "")
 	lazyFlag := cmd.Bool("lazy", false, "")
 	helpFlag := cmd.Bool("help", false, "")
+	// CPU profiling flag (handled in main, but needs to be declared to avoid error)
+	_ = cmd.String("cpuprofile", "", "")
 	err := cmd.Parse(args)
 	if err != nil {
 		_, _ = fmt.Fprint(stderr, generateUsageText)
@@ -409,4 +423,19 @@ func lspCmd(stdin io.Reader, stdout, stderr io.Writer, args []string) (code int)
 		return 1
 	}
 	return 0
+}
+
+func profile(cpuProfile string) (func(), error) {
+	f, err := os.Create(cpuProfile)
+	if err != nil {
+		return nil, err
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("could not start CPU profile: %w", err)
+	}
+	return func() {
+		pprof.StopCPUProfile()
+		_ = f.Close()
+	}, nil
 }
