@@ -25,10 +25,17 @@ type ComponentSignature struct {
 	IsPointerRecv bool
 }
 
-// ParameterInfo represents a function parameter or struct field
+// ParameterInfo represents a function parameter or struct field with rich type information
 type ParameterInfo struct {
-	Name string
-	Type string
+	Name         string
+	Type         string     // String representation for display/debugging
+	IsComponent  bool       // Pre-computed: implements templ.Component interface
+	IsAttributer bool       // Pre-computed: implements templ.Attributer interface
+	IsPointer    bool       // Pre-computed: is a pointer type
+	IsSlice      bool       // Pre-computed: is a slice type
+	IsMap        bool       // Pre-computed: is a map type
+	IsString     bool       // Pre-computed: is string type
+	IsBool       bool       // Pre-computed: is bool type
 }
 
 // ComponentResolutionError represents an error during component resolution with position information
@@ -59,6 +66,237 @@ func newSymbolResolver() SymbolResolver {
 		signatures: make(map[string]ComponentSignature),
 		overlay:    make(map[string][]byte),
 	}
+}
+
+// ResolveElementComponent resolves a component for element syntax during code generation
+// This is the main entry point for element component resolution
+func (r *SymbolResolver) ResolveElementComponent(fromDir, currentPkg string, componentName string, tf *parser.TemplateFile) (ComponentSignature, error) {
+	// First check cache
+	if sig, ok := r.signatures[componentName]; ok {
+		return sig, nil
+	}
+	
+	// Parse component name to determine resolution strategy
+	var packagePath, localName string
+	if strings.Contains(componentName, ".") {
+		parts := strings.Split(componentName, ".")
+		if len(parts) == 2 {
+			// Check if first part is an import alias
+			importPath := r.resolveImportAlias(parts[0], tf)
+			if importPath != "" {
+				// Cross-package component: alias.Component  
+				packagePath = importPath
+				localName = parts[1]
+			} else {
+				// Could be struct variable method: structVar.Method
+				localName = componentName // Try as local component first
+			}
+		} else {
+			// Complex dotted name - treat as local
+			localName = componentName
+		}
+	} else {
+		// Simple name - definitely local
+		localName = componentName
+	}
+	
+	var sig ComponentSignature
+	var err error
+	
+	if packagePath != "" {
+		// Cross-package resolution
+		sig, err = r.ResolveComponentFrom(fromDir, packagePath, localName)
+	} else {
+		// Local resolution - try multiple strategies
+		sig, err = r.resolveLocalComponent(fromDir, currentPkg, localName, tf)
+	}
+	
+	if err != nil {
+		return ComponentSignature{}, err
+	}
+	
+	// Cache with original component name for future lookups
+	sig.QualifiedName = componentName
+	r.signatures[componentName] = sig
+	
+	return sig, nil
+}
+
+// resolveImportAlias resolves an import alias to its full package path
+func (r *SymbolResolver) resolveImportAlias(alias string, tf *parser.TemplateFile) string {
+	for _, node := range tf.Nodes {
+		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
+			if strings.Contains(goExpr.Expression.Value, "import") {
+				if path := r.parseImportPath(goExpr.Expression.Value, alias); path != "" {
+					return path
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// parseImportPath extracts the import path for a specific alias using Go AST parser
+func (r *SymbolResolver) parseImportPath(goCode, packageAlias string) string {
+	// Try to parse as a complete Go file first
+	fullGoCode := "package main\n" + goCode
+	fset := token.NewFileSet()
+	
+	astFile, err := goparser.ParseFile(fset, "", fullGoCode, goparser.ImportsOnly)
+	if err != nil {
+		// If that fails, try parsing just the import block
+		if strings.Contains(goCode, "import (") {
+			start := strings.Index(goCode, "import (")
+			if start != -1 {
+				end := strings.Index(goCode[start:], ")")
+				if end != -1 {
+					importBlock := goCode[start : start+end+1]
+					fullGoCode = "package main\n" + importBlock
+					astFile, err = goparser.ParseFile(fset, "", fullGoCode, goparser.ImportsOnly)
+				}
+			}
+		}
+		if err != nil {
+			return ""
+		}
+	}
+
+	// Extract import path for the specific alias from AST
+	for _, imp := range astFile.Imports {
+		if imp.Path != nil {
+			pkgPath := strings.Trim(imp.Path.Value, `"`)
+			var alias string
+
+			if imp.Name != nil {
+				// Explicit alias: import alias "path"
+				alias = imp.Name.Name
+			} else {
+				// No explicit alias: import "path" -> derive alias from path
+				if lastSlash := strings.LastIndex(pkgPath, "/"); lastSlash != -1 {
+					alias = pkgPath[lastSlash+1:]
+				}
+			}
+
+			if alias == packageAlias {
+				return pkgPath
+			}
+		}
+	}
+
+	return ""
+}
+
+// resolveLocalComponent resolves a local component using multiple strategies
+func (r *SymbolResolver) resolveLocalComponent(fromDir, currentPkg, componentName string, tf *parser.TemplateFile) (ComponentSignature, error) {
+	// Strategy 1: Check already extracted local templates
+	if sig, ok := r.GetLocalTemplate(componentName); ok {
+		return sig, nil
+	}
+	
+	// Strategy 2: If dotted name, try struct variable method resolution
+	if strings.Contains(componentName, ".") {
+		if sig, ok := r.resolveStructMethod(componentName, tf); ok {
+			return sig, nil
+		}
+	}
+	
+	// Strategy 3: Try current package resolution with go/packages
+	if currentPkg != "" {
+		sig, err := r.ResolveComponentFrom(fromDir, currentPkg, componentName)
+		if err == nil {
+			return sig, nil
+		}
+	}
+	
+	return ComponentSignature{}, fmt.Errorf("component %s not found", componentName)
+}
+
+// resolveStructMethod resolves struct variable method components like structVar.Method
+func (r *SymbolResolver) resolveStructMethod(componentName string, tf *parser.TemplateFile) (ComponentSignature, bool) {
+	parts := strings.Split(componentName, ".")
+	if len(parts) < 2 {
+		return ComponentSignature{}, false
+	}
+	
+	varName := parts[0]
+	methodName := strings.Join(parts[1:], ".")
+	
+	// Look through template file for variable declarations  
+	for _, node := range tf.Nodes {
+		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
+			if typeName := r.extractVariableType(goExpr.Expression.Value, varName); typeName != "" {
+				// Look for signature with TypeName.MethodName
+				candidateSig := typeName + "." + methodName
+				if sig, ok := r.GetLocalTemplate(candidateSig); ok {
+					// Create alias for future lookups
+					sig.QualifiedName = componentName
+					r.signatures[componentName] = sig
+					return sig, true
+				}
+			}
+		}
+	}
+	
+	return ComponentSignature{}, false
+}
+
+// extractVariableType extracts the type from a variable declaration using AST parsing
+func (r *SymbolResolver) extractVariableType(goCode, varName string) string {
+	// Parse the Go code to extract variable type information
+	src := "package main\n" + goCode
+	fset := token.NewFileSet()
+	node, err := goparser.ParseFile(fset, "", src, goparser.AllErrors)
+	if err != nil || node == nil {
+		// Fallback to simple string parsing
+		return r.extractVariableTypeSimple(goCode, varName)
+	}
+	
+	// Look for variable declarations in AST
+	for _, decl := range node.Decls {
+		if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.VAR {
+			for _, spec := range genDecl.Specs {
+				if valueSpec, ok := spec.(*ast.ValueSpec); ok {
+					for _, name := range valueSpec.Names {
+						if name.Name == varName && valueSpec.Type != nil {
+							return r.astTypeToString(valueSpec.Type)
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return ""
+}
+
+// extractVariableTypeSimple provides fallback simple string parsing for variable types
+func (r *SymbolResolver) extractVariableTypeSimple(goCode, varName string) string {
+	lines := strings.Split(goCode, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Handle "var varName TypeName"
+		if strings.HasPrefix(line, "var "+varName+" ") {
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				return parts[2]
+			}
+		}
+
+		// Handle "varName := TypeName{}" or "varName = TypeName{}"
+		if strings.Contains(line, varName+" :=") || strings.Contains(line, varName+" =") {
+			// Extract type from constructor call like "StructComponent{}"
+			if idx := strings.Index(line, "{"); idx != -1 {
+				beforeBrace := line[:idx]
+				parts := strings.Fields(beforeBrace)
+				if len(parts) >= 3 {
+					return parts[len(parts)-1]
+				}
+			}
+		}
+	}
+
+	return ""
 }
 
 // ResolveComponentFrom resolves a component starting from a specific directory
@@ -261,10 +499,7 @@ func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath str
 
 		for i := 0; i < params.Len(); i++ {
 			param := params.At(i)
-			paramInfo = append(paramInfo, ParameterInfo{
-				Name: param.Name(),
-				Type: param.Type().String(),
-			})
+			paramInfo = append(paramInfo, r.analyzeParameterType(param.Name(), param.Type()))
 		}
 	} else {
 		typeName, ok := obj.(*types.TypeName)
@@ -286,7 +521,7 @@ func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath str
 		}
 		
 		// Extract struct fields for struct components
-		paramInfo = r.extractStructFields(typeName.Type())
+		paramInfo = r.extractStructFieldsWithTypeAnalysis(typeName.Type())
 	}
 
 	return ComponentSignature{
@@ -312,10 +547,7 @@ func (r *SymbolResolver) extractFunctionSignature(fn *types.Func, pkgPath string
 	paramInfo := make([]ParameterInfo, 0, params.Len())
 	for i := 0; i < params.Len(); i++ {
 		param := params.At(i)
-		paramInfo = append(paramInfo, ParameterInfo{
-			Name: param.Name(),
-			Type: param.Type().String(),
-		})
+		paramInfo = append(paramInfo, r.analyzeParameterType(param.Name(), param.Type()))
 	}
 
 	return ComponentSignature{
@@ -502,7 +734,7 @@ func (r *SymbolResolver) parseTemplateSignatureFromAST(exprValue string) (name s
 	return "", nil, nil
 }
 
-// extractParametersFromAST extracts parameter information from AST field list
+// extractParametersFromAST extracts parameter information from AST field list with type analysis
 func (r *SymbolResolver) extractParametersFromAST(fieldList *ast.FieldList) []ParameterInfo {
 	if fieldList == nil || len(fieldList.List) == 0 {
 		return nil
@@ -512,25 +744,81 @@ func (r *SymbolResolver) extractParametersFromAST(fieldList *ast.FieldList) []Pa
 
 	for _, field := range fieldList.List {
 		fieldType := r.astTypeToString(field.Type)
+		
+		// Analyze type characteristics from AST
+		typeInfo := r.analyzeASTType(fieldType, field.Type)
 
 		// Handle multiple names with the same type (e.g., "a, b string")
 		if len(field.Names) > 0 {
 			for _, name := range field.Names {
-				params = append(params, ParameterInfo{
-					Name: name.Name,
-					Type: fieldType,
-				})
+				param := typeInfo
+				param.Name = name.Name
+				params = append(params, param)
 			}
 		} else {
 			// Handle anonymous parameters
-			params = append(params, ParameterInfo{
-				Name: "",
-				Type: fieldType,
-			})
+			param := typeInfo
+			param.Name = ""
+			params = append(params, param)
 		}
 	}
 
 	return params
+}
+
+// analyzeASTType analyzes type characteristics from AST (for templ templates)
+func (r *SymbolResolver) analyzeASTType(typeStr string, expr ast.Expr) ParameterInfo {
+	// For templ templates, we do basic analysis based on AST structure
+	// This is less comprehensive than full type resolution but sufficient for templates
+	
+	isComponent := (typeStr == "templ.Component" || typeStr == "github.com/a-h/templ.Component")
+	isAttributer := (typeStr == "templ.Attributer" || typeStr == "github.com/a-h/templ.Attributer")
+	isPointer := false
+	isSlice := false
+	isMap := false
+	isString := false
+	isBool := false
+	
+	// Analyze AST structure
+	switch t := expr.(type) {
+	case *ast.Ident:
+		// Basic types: string, int, bool, etc.
+		isString = t.Name == "string"
+		isBool = t.Name == "bool"
+	case *ast.StarExpr:
+		// Pointer types
+		isPointer = true
+		if ident, ok := t.X.(*ast.Ident); ok {
+			isString = ident.Name == "string"
+			isBool = ident.Name == "bool"
+		}
+	case *ast.ArrayType:
+		// Slice or array types
+		isSlice = true
+	case *ast.MapType:
+		// Map types
+		isMap = true
+	case *ast.SelectorExpr:
+		// Qualified types like templ.Component
+		if typeStr == "templ.Component" || typeStr == "github.com/a-h/templ.Component" {
+			isComponent = true
+		}
+		if typeStr == "templ.Attributer" || typeStr == "github.com/a-h/templ.Attributer" {
+			isAttributer = true
+		}
+	}
+	
+	return ParameterInfo{
+		Name:         "", // Will be set by caller
+		Type:         typeStr,
+		IsComponent:  isComponent,
+		IsAttributer: isAttributer,
+		IsPointer:    isPointer,
+		IsSlice:      isSlice,
+		IsMap:        isMap,
+		IsString:     isString,
+		IsBool:       isBool,
+	}
 }
 
 // astTypeToString converts AST type expressions to their string representation
@@ -689,8 +977,109 @@ func (r *SymbolResolver) implementsComponent(t types.Type, pkg *types.Package) (
 	return true, isPointerReceiver
 }
 
-// extractStructFields extracts exported struct fields for struct components
-func (r *SymbolResolver) extractStructFields(t types.Type) []ParameterInfo {
+// analyzeParameterType performs comprehensive type analysis for a parameter
+func (r *SymbolResolver) analyzeParameterType(name string, t types.Type) ParameterInfo {
+	typeStr := t.String()
+	
+	// Analyze the type for various characteristics
+	isComponent := r.implementsComponentInterface(t)
+	isAttributer := r.implementsAttributerInterface(t)
+	isPointer := false
+	isSlice := false
+	isMap := false
+	isString := false
+	isBool := false
+	
+	// Check underlying type characteristics
+	switch underlying := t.Underlying().(type) {
+	case *types.Pointer:
+		isPointer = true
+		// Check what the pointer points to
+		pointee := underlying.Elem().Underlying()
+		switch pointee.(type) {
+		case *types.Basic:
+			basic := pointee.(*types.Basic)
+			isString = basic.Kind() == types.String
+			isBool = basic.Kind() == types.Bool
+		}
+	case *types.Slice:
+		isSlice = true
+	case *types.Map:
+		isMap = true
+	case *types.Basic:
+		isString = underlying.Kind() == types.String
+		isBool = underlying.Kind() == types.Bool
+	}
+	
+	// Also check named types (e.g., type MyString string)
+	if named, ok := t.(*types.Named); ok {
+		if basic, ok := named.Underlying().(*types.Basic); ok {
+			isString = basic.Kind() == types.String
+			isBool = basic.Kind() == types.Bool
+		}
+	}
+	
+	return ParameterInfo{
+		Name:         name,
+		Type:         typeStr,
+		IsComponent:  isComponent,
+		IsAttributer: isAttributer,
+		IsPointer:    isPointer,
+		IsSlice:      isSlice,
+		IsMap:        isMap,
+		IsString:     isString,
+		IsBool:       isBool,
+	}
+}
+
+// implementsComponentInterface checks if a type implements templ.Component interface
+func (r *SymbolResolver) implementsComponentInterface(t types.Type) bool {
+	// Look for Render(context.Context, io.Writer) error method
+	method, _, _ := types.LookupFieldOrMethod(t, true, nil, "Render")
+	if method == nil {
+		return false
+	}
+	
+	fn, ok := method.(*types.Func)
+	if !ok {
+		return false
+	}
+	
+	sig := fn.Type().(*types.Signature)
+	
+	// Check parameters: (context.Context, io.Writer)
+	params := sig.Params()
+	if params.Len() != 2 {
+		return false
+	}
+	if params.At(0).Type().String() != "context.Context" {
+		return false
+	}
+	if params.At(1).Type().String() != "io.Writer" {
+		return false
+	}
+	
+	// Check return type: error
+	results := sig.Results()
+	if results.Len() != 1 {
+		return false
+	}
+	if results.At(0).Type().String() != "error" {
+		return false
+	}
+	
+	return true
+}
+
+// implementsAttributerInterface checks if a type implements templ.Attributer interface
+func (r *SymbolResolver) implementsAttributerInterface(t types.Type) bool {
+	// Check for both qualified and unqualified templ.Attributer
+	typeStr := t.String()
+	return typeStr == "templ.Attributer" || typeStr == "github.com/a-h/templ.Attributer"
+}
+
+// extractStructFieldsWithTypeAnalysis extracts exported struct fields with rich type analysis
+func (r *SymbolResolver) extractStructFieldsWithTypeAnalysis(t types.Type) []ParameterInfo {
 	var structType *types.Struct
 	switch underlying := t.Underlying().(type) {
 	case *types.Struct:
@@ -703,12 +1092,14 @@ func (r *SymbolResolver) extractStructFields(t types.Type) []ParameterInfo {
 	for i := 0; i < structType.NumFields(); i++ {
 		field := structType.Field(i)
 		if field.Exported() {
-			fields = append(fields, ParameterInfo{
-				Name: field.Name(),
-				Type: field.Type().String(),
-			})
+			fields = append(fields, r.analyzeParameterType(field.Name(), field.Type()))
 		}
 	}
 
 	return fields
+}
+
+// extractStructFields extracts exported struct fields for struct components (legacy compatibility)
+func (r *SymbolResolver) extractStructFields(t types.Type) []ParameterInfo {
+	return r.extractStructFieldsWithTypeAnalysis(t)
 }

@@ -2,10 +2,7 @@ package generator
 
 import (
 	"fmt"
-	goparser "go/parser"
-	"go/token"
 	"slices"
-	"strings"
 
 	_ "embed"
 
@@ -140,7 +137,7 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 	params := sig.Parameters
 	// We support an optional last parameter that is of type templ.Attributer.
 	var attrParam ParameterInfo
-	if len(params) > 0 && isTemplAttributer(params[len(params)-1].Type) {
+	if len(params) > 0 && params[len(params)-1].IsAttributer {
 		attrParam = params[len(params)-1]
 		params = params[:len(params)-1]
 	}
@@ -203,7 +200,7 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 }
 
 func (g *generator) writeElementComponentArgNewVar(indentLevel int, attr parser.Attribute, param ParameterInfo) (string, error) {
-	if isTemplComponent(param.Type) {
+	if param.IsComponent {
 		return g.writeElementComponentAttrComponent(indentLevel, attr, param)
 	}
 
@@ -510,264 +507,20 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 	return nil
 }
 
-// tryResolveStructMethod attempts to resolve struct method components like structComp.Page to StructComponent.Page
-func (g *generator) tryResolveStructMethod(componentName string) bool {
-	parts := strings.Split(componentName, ".")
-	if len(parts) < 2 {
-		return false
-	}
 
-	varName := parts[0]
-	methodName := strings.Join(parts[1:], ".")
 
-	// Look through the template file for variable declarations
-	for _, node := range g.tf.Nodes {
-		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
-			// Check if this contains variable declarations
-			if g.containsVariableDeclaration(goExpr.Expression.Value, varName) {
-				typeName := g.extractVariableType(goExpr.Expression.Value, varName)
-				if typeName != "" {
-					// Look for signature with TypeName.MethodName
-					candidateSig := typeName + "." + methodName
-					if _, ok := g.symbolResolver.GetLocalTemplate(candidateSig); ok {
-						// Add alias mapping for future lookups
-						g.symbolResolver.AddLocalTemplateAlias(componentName, candidateSig)
-						return true
-					}
-				}
-			}
-		}
-	}
 
-	return false
-}
-
-// containsVariableDeclaration checks if the Go code contains a variable declaration
-func (g *generator) containsVariableDeclaration(goCode, varName string) bool {
-	// Simple pattern matching for "var varName" or "varName :="
-	patterns := []string{
-		"var " + varName + " ",
-		varName + " :=",
-		varName + " =",
-	}
-
-	for _, pattern := range patterns {
-		if strings.Contains(goCode, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-// extractVariableType extracts the type from a variable declaration
-func (g *generator) extractVariableType(goCode, varName string) string {
-	lines := strings.Split(goCode, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		// Handle "var varName TypeName"
-		if strings.HasPrefix(line, "var "+varName+" ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 3 {
-				return parts[2]
-			}
-		}
-
-		// Handle "varName := TypeName{}" or "varName = TypeName{}"
-		if strings.Contains(line, varName+" :=") || strings.Contains(line, varName+" =") {
-			// Extract type from constructor call like "StructComponent{}"
-			if idx := strings.Index(line, "{"); idx != -1 {
-				beforeBrace := line[:idx]
-				parts := strings.Fields(beforeBrace)
-				if len(parts) >= 3 {
-					return parts[len(parts)-1]
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
-func (g *generator) resolveImportPath(packageAlias string) string {
-	fset := token.NewFileSet()
-
-	// Look through the template file's imports to find the import path for this alias
-	for _, node := range g.tf.Nodes {
-		if importNode, ok := node.(*parser.TemplateFileGoExpression); ok {
-			// Check if this contains import statements
-			if strings.Contains(importNode.Expression.Value, "import") {
-				path := g.parseImportPathWithAST(importNode.Expression.Value, packageAlias, fset)
-				if path != "" {
-					return path
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// parseImportPathWithAST extracts the import path for a specific alias using Go AST parser
-func (g *generator) parseImportPathWithAST(goCode, packageAlias string, fset *token.FileSet) string {
-	// Try to parse as a complete Go file first
-	fullGoCode := "package main\n" + goCode
-
-	astFile, err := goparser.ParseFile(fset, "", fullGoCode, goparser.ImportsOnly)
-	if err != nil {
-		// If that fails, try parsing just the import block
-		if strings.Contains(goCode, "import (") {
-			// Extract just the import block
-			start := strings.Index(goCode, "import (")
-			if start != -1 {
-				end := strings.Index(goCode[start:], ")")
-				if end != -1 {
-					importBlock := goCode[start : start+end+1]
-					fullGoCode = "package main\n" + importBlock
-					astFile, err = goparser.ParseFile(fset, "", fullGoCode, goparser.ImportsOnly)
-				}
-			}
-		}
-
-		if err != nil {
-			// Fall back to simple string parsing for edge cases
-			return g.parseImportPathFallback(goCode, packageAlias)
-		}
-	}
-
-	// Extract import path for the specific alias from AST
-	for _, imp := range astFile.Imports {
-		if imp.Path != nil {
-			pkgPath := strings.Trim(imp.Path.Value, `"`)
-			var alias string
-
-			if imp.Name != nil {
-				// Explicit alias: import alias "path"
-				alias = imp.Name.Name
-			} else {
-				// No explicit alias: import "path" -> derive alias from path
-				if lastSlash := strings.LastIndex(pkgPath, "/"); lastSlash != -1 {
-					alias = pkgPath[lastSlash+1:]
-				}
-			}
-
-			if alias == packageAlias {
-				return pkgPath
-			}
-		}
-	}
-
-	return ""
-}
-
-// parseImportPathFallback provides fallback parsing for edge cases
-func (g *generator) parseImportPathFallback(goCode, packageAlias string) string {
-	lines := strings.Split(goCode, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "import ") {
-			// Remove "import " prefix
-			importPart := strings.TrimSpace(line[7:])
-
-			// Handle quoted import without alias
-			if strings.HasPrefix(importPart, `"`) && strings.HasSuffix(importPart, `"`) {
-				// import "github.com/pkg/name" -> alias is "name"
-				pkgPath := importPart[1 : len(importPart)-1]
-				if lastSlash := strings.LastIndex(pkgPath, "/"); lastSlash != -1 {
-					alias := pkgPath[lastSlash+1:]
-					if alias == packageAlias {
-						return pkgPath
-					}
-				}
-			} else {
-				// Handle import with explicit alias
-				// alias "package" or . "package"
-				parts := strings.Fields(importPart)
-				if len(parts) >= 2 {
-					alias := parts[0]
-					if alias == packageAlias {
-						return strings.Trim(parts[1], `"`)
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
 
 // resolveElementComponent resolves a component on-demand during code generation
 func (g *generator) resolveElementComponent(n *parser.ElementComponent) (ComponentSignature, error) {
-	// First check if we already have this component in cache
-	if sig, ok := g.symbolResolver.GetComponentSignature(n.Name); ok {
-		return sig, nil
-	}
-	
-	// Parse component name to determine if it's a package import or local
-	var packageName, componentName string
-	if strings.Contains(n.Name, ".") {
-		parts := strings.Split(n.Name, ".")
-		if len(parts) == 2 {
-			// Check if this is a package import by looking for the import
-			importPath := g.resolveImportPath(parts[0])
-			if importPath != "" {
-				// This is definitely a package import
-				packageName = parts[0]
-				componentName = parts[1]
-			} else {
-				// No import found - treat as local component (structVar.Method)
-				componentName = n.Name
-			}
-		} else {
-			// More than 2 parts or other cases - treat as local
-			componentName = n.Name
-		}
-	} else {
-		// No dots - definitely local
-		componentName = n.Name
-	}
-	
-	var sig ComponentSignature
-	var err error
-	
-	if packageName != "" {
-		// Cross-package component
-		importPath := g.resolveImportPath(packageName)
-		if importPath == "" {
-			return ComponentSignature{}, fmt.Errorf("import path not found for package %s", packageName)
-		}
-		sig, err = g.symbolResolver.ResolveComponentFrom(g.currentFileDir(), importPath, componentName)
-	} else {
-		// Local component - first try local templates
-		if localSig, ok := g.symbolResolver.GetLocalTemplate(componentName); ok {
-			return localSig, nil
-		}
-		
-		// If this looks like a struct method (var.Method), try to resolve it
-		if strings.Contains(componentName, ".") {
-			if g.tryResolveStructMethod(componentName) {
-				// Try again after resolution
-				if localSig, ok := g.symbolResolver.GetLocalTemplate(componentName); ok {
-					return localSig, nil
-				}
-			}
-		}
-		
-		// If still not found, try current package
-		currentPkgPath, pkgErr := g.getCurrentPackagePath()
-		if pkgErr != nil {
-			return ComponentSignature{}, pkgErr
-		}
-		sig, err = g.symbolResolver.ResolveComponentFrom(g.currentFileDir(), currentPkgPath, componentName)
-	}
-	
+	// Get current package path for local resolution
+	currentPkgPath, err := g.getCurrentPackagePath()
 	if err != nil {
-		return ComponentSignature{}, err
+		currentPkgPath = "" // Continue without current package path
 	}
 	
-	// Cache the resolved signature for future use
-	sig.QualifiedName = n.Name
-	g.symbolResolver.AddComponentSignature(sig)
-	
-	return sig, nil
+	// Use the symbol resolver's unified element component resolution
+	return g.symbolResolver.ResolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
 }
 
 // collectAndResolveComponents is no longer needed - components are resolved on-demand
@@ -797,14 +550,4 @@ func (g *generator) addComponentDiagnostic(comp ComponentReference, message stri
 	})
 }
 
-func isTemplAttributer(typ string) bool {
-	// TODO: better handling of the types:
-	// when the type comes from templ file, it will be "templ.Attributer"
-	// when it comes from a Go file which uses the x/tool/packages parser the moment, it will be "github.com/a-h/templ.Attributer"
-	// This is not ideal but a ok compromise. when the symbols is from templ files, it may not have been resolved, only parsed. And resolving takes time and may nto be available.
-	return typ == "templ.Attributer" || typ == "github.com/a-h/templ.Attributer"
-}
-
-func isTemplComponent(typ string) bool {
-	return typ == "templ.Component" || typ == "github.com/a-h/templ.Component"
-}
+// Type checking functions removed - now using cached type analysis in ParameterInfo

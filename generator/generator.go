@@ -1698,7 +1698,7 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 			// Check if expression value matches a parameter name with templ.Component type
 			exprValue := strings.TrimSpace(e.Value)
 			for _, param := range templSig.Parameters {
-				if param.Name == exprValue && isTemplComponent(param.Type) {
+				if param.Name == exprValue && param.IsComponent {
 					// This is a component parameter, use call template expression logic
 					return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})
 				}
