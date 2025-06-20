@@ -70,8 +70,8 @@ func enhancedMissingComponentDiagnoser(t *parser.TemplateFile) ([]parser.Diagnos
 	// Find defined templ components in this file
 	definedComponents := collectDefinedComponents(t)
 
-	// Create unified resolver
-	resolver := newAutoDetectUnifiedResolver()
+	// Create symbol resolver
+	resolver := newSymbolResolver()
 
 	// Check each component reference
 	for _, ref := range componentRefs {

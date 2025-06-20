@@ -416,7 +416,7 @@ func (g *generator) writeRestAppend(indentLevel int, restVarName string, key str
 }
 
 func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser.ElementComponent) (err error) {
-	sigs, ok := g.unifiedResolver.GetComponentSignature(n.Name)
+	sigs, ok := g.symbolResolver.GetComponentSignature(n.Name)
 	if !ok {
 		return fmt.Errorf("component %s signature not found at %s:%d:%d", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col)
 	}
@@ -528,9 +528,9 @@ func (g *generator) tryResolveStructMethod(componentName string) bool {
 				if typeName != "" {
 					// Look for signature with TypeName.MethodName
 					candidateSig := typeName + "." + methodName
-					if _, ok := g.unifiedResolver.GetLocalTemplate(candidateSig); ok {
+					if _, ok := g.symbolResolver.GetLocalTemplate(candidateSig); ok {
 						// Add alias mapping for future lookups
-						g.unifiedResolver.AddLocalTemplateAlias(componentName, candidateSig)
+						g.symbolResolver.AddLocalTemplateAlias(componentName, candidateSig)
 						return true
 					}
 				}
@@ -711,7 +711,7 @@ func (g *generator) collectAndResolveComponents() error {
 		if comp.PackageName == "" {
 			// Local component - check unified resolver first
 			// First try local templates
-			if templSig, ok := g.unifiedResolver.GetLocalTemplate(comp.Name); ok {
+			if templSig, ok := g.symbolResolver.GetLocalTemplate(comp.Name); ok {
 				sig = templSig
 				found = true
 			} else {
@@ -720,7 +720,7 @@ func (g *generator) collectAndResolveComponents() error {
 					found = g.tryResolveStructMethod(comp.Name)
 					if found {
 						// Find the resolved signature in local templates
-						if templSig, ok := g.unifiedResolver.GetLocalTemplate(comp.Name); ok {
+						if templSig, ok := g.symbolResolver.GetLocalTemplate(comp.Name); ok {
 							sig = templSig
 						}
 					}
@@ -730,7 +730,7 @@ func (g *generator) collectAndResolveComponents() error {
 					// Use unified resolver for local package resolution
 					currentPkgPath, pkgErr := g.getCurrentPackagePath()
 					if pkgErr == nil {
-						sig, err = g.unifiedResolver.ResolveComponentFrom(g.currentFileDir(), currentPkgPath, comp.Name)
+						sig, err = g.symbolResolver.ResolveComponentFrom(g.currentFileDir(), currentPkgPath, comp.Name)
 						if err == nil {
 							found = true
 						}
@@ -743,7 +743,7 @@ func (g *generator) collectAndResolveComponents() error {
 			// Package import - use unified resolver with resolved import path
 			importPath := g.resolveImportPath(comp.PackageName)
 			if importPath != "" {
-				sig, err = g.unifiedResolver.ResolveComponentFrom(g.currentFileDir(), importPath, comp.Name)
+				sig, err = g.symbolResolver.ResolveComponentFrom(g.currentFileDir(), importPath, comp.Name)
 				if err == nil {
 					found = true
 				}
@@ -777,7 +777,7 @@ func (g *generator) collectAndResolveComponents() error {
 			key = comp.PackageName + "." + comp.Name
 		}
 		sig.QualifiedName = key
-		g.unifiedResolver.AddComponentSignature(sig)
+		g.symbolResolver.AddComponentSignature(sig)
 	}
 
 	// Don't return an error if no component signatures are resolved

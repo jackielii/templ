@@ -113,10 +113,10 @@ func HasChanged(previous, updated GeneratorOutput) bool {
 // to the location of the generated Go code in the output.
 func Generate(template *parser.TemplateFile, w io.Writer, opts ...GenerateOpt) (op GeneratorOutput, err error) {
 	g := &generator{
-		tf:              template,
-		w:               NewRangeWriter(w),
-		sourceMap:       parser.NewSourceMap(),
-		unifiedResolver: newAutoDetectUnifiedResolver(),
+		tf:             template,
+		w:              NewRangeWriter(w),
+		sourceMap:      parser.NewSourceMap(),
+		symbolResolver: newSymbolResolver(),
 	}
 	for _, opt := range opts {
 		if err = opt(g); err != nil {
@@ -139,7 +139,7 @@ type generator struct {
 	childrenVar string
 
 	options         GeneratorOptions
-	unifiedResolver AutoDetectUnifiedResolver
+	symbolResolver SymbolResolver
 	diagnostics     []parser.Diagnostic
 
 	// currentTemplate tracks the current Templ block being processed.
@@ -149,7 +149,7 @@ type generator struct {
 
 func (g *generator) generate() (err error) {
 	// Extract local template signatures
-	g.unifiedResolver.ExtractSignatures(g.tf)
+	g.symbolResolver.ExtractSignatures(g.tf)
 
 	if err = g.collectAndResolveComponents(); err != nil {
 		return fmt.Errorf("failed to resolve components: %w", err)
@@ -1696,7 +1696,7 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 	// In this block, we want to support { child } expression for templ.Component variables.
 	// Which means we only support local block variables, and not global variables.
 	if g.currentTemplate != nil {
-		if templSig, ok := g.unifiedResolver.GetLocalTemplate(g.getTemplateName(g.currentTemplate)); ok {
+		if templSig, ok := g.symbolResolver.GetLocalTemplate(g.getTemplateName(g.currentTemplate)); ok {
 			// Check if expression value matches a parameter name with templ.Component type
 			exprValue := strings.TrimSpace(e.Value)
 			for _, param := range templSig.Parameters {

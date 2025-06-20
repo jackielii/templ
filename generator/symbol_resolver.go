@@ -46,42 +46,39 @@ func (e ComponentResolutionError) Error() string {
 }
 
 
-// AutoDetectUnifiedResolver automatically detects module roots using modcheck.WalkUp
-// and provides unified resolution for both templ templates and Go components
-type AutoDetectUnifiedResolver struct {
-	cache          map[string]ComponentSignature
-	overlay        map[string][]byte
-	localTemplates map[string]ComponentSignature // Local templates from current file
-	componentSigs  map[string]ComponentSignature // Resolved component signatures for code generation
+// SymbolResolver automatically detects module roots and provides unified resolution
+// for both templ templates and Go components across packages
+type SymbolResolver struct {
+	signatures map[string]ComponentSignature // Unified cache for all component signatures
+	overlay    map[string][]byte             // Go file overlays for templ templates
 }
 
-// newAutoDetectUnifiedResolver creates a new unified resolver that automatically detects module roots
-func newAutoDetectUnifiedResolver() AutoDetectUnifiedResolver {
-	return AutoDetectUnifiedResolver{
-		cache:          make(map[string]ComponentSignature),
-		overlay:        make(map[string][]byte),
-		localTemplates: make(map[string]ComponentSignature),
-		componentSigs:  make(map[string]ComponentSignature),
+// newSymbolResolver creates a new symbol resolver
+func newSymbolResolver() SymbolResolver {
+	return SymbolResolver{
+		signatures: make(map[string]ComponentSignature),
+		overlay:    make(map[string][]byte),
 	}
 }
 
 // ResolveComponentFrom resolves a component starting from a specific directory
 // This is the primary method used during code generation
-func (r *AutoDetectUnifiedResolver) ResolveComponentFrom(fromDir, pkgPath, componentName string) (ComponentSignature, error) {
+func (r *SymbolResolver) ResolveComponentFrom(fromDir, pkgPath, componentName string) (ComponentSignature, error) {
 	return r.ResolveComponentWithPosition(fromDir, pkgPath, componentName, parser.Position{}, "")
 }
 
 // ResolveComponentWithPosition resolves a component with position information for error reporting
-func (r *AutoDetectUnifiedResolver) ResolveComponentWithPosition(fromDir, pkgPath, componentName string, pos parser.Position, fileName string) (ComponentSignature, error) {
-	// First check if it's a local template (empty or current package path)
+func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componentName string, pos parser.Position, fileName string) (ComponentSignature, error) {
+	// Generate cache key based on context
+	var cacheKey string
 	if pkgPath == "" {
-		if sig, ok := r.localTemplates[componentName]; ok {
-			return sig, nil
-		}
+		cacheKey = "local:" + componentName
+	} else {
+		cacheKey = "pkg:" + pkgPath + ":" + componentName
 	}
 	
-	cacheKey := fmt.Sprintf("%s.%s", pkgPath, componentName)
-	if sig, ok := r.cache[cacheKey]; ok {
+	// Check unified cache first
+	if sig, ok := r.signatures[cacheKey]; ok {
 		return sig, nil
 	}
 
@@ -170,13 +167,13 @@ func (r *AutoDetectUnifiedResolver) ResolveComponentWithPosition(fromDir, pkgPat
 		return ComponentSignature{}, err
 	}
 
-	// Cache the signature
-	r.cache[cacheKey] = sig
+	// Cache the signature in unified cache
+	r.signatures[cacheKey] = sig
 	return sig, nil
 }
 
 // ResolveComponent resolves from current working directory (for compatibility)
-func (r *AutoDetectUnifiedResolver) ResolveComponent(pkgPath, componentName string) (ComponentSignature, error) {
+func (r *SymbolResolver) ResolveComponent(pkgPath, componentName string) (ComponentSignature, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return ComponentSignature{}, fmt.Errorf("failed to get working directory: %w", err)
@@ -186,7 +183,7 @@ func (r *AutoDetectUnifiedResolver) ResolveComponent(pkgPath, componentName stri
 
 // processTemplFiles finds and parses .templ files in the package directory,
 // generating Go stub overlays for each templ template
-func (r *AutoDetectUnifiedResolver) processTemplFiles(pkgDir, pkgName string) error {
+func (r *SymbolResolver) processTemplFiles(pkgDir, pkgName string) error {
 	templFiles, err := filepath.Glob(filepath.Join(pkgDir, "*.templ"))
 	if err != nil {
 		return fmt.Errorf("failed to find templ files in %s: %w", pkgDir, err)
@@ -215,7 +212,7 @@ func (r *AutoDetectUnifiedResolver) processTemplFiles(pkgDir, pkgName string) er
 }
 
 // generateOverlay creates Go stub code for templ templates
-func (r *AutoDetectUnifiedResolver) generateOverlay(tf *parser.TemplateFile, pkgName string) string {
+func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("package %s\n\n", pkgName))
@@ -240,7 +237,7 @@ func (r *AutoDetectUnifiedResolver) generateOverlay(tf *parser.TemplateFile, pkg
 }
 
 // extractComponentSignature extracts component signature with position-aware error handling
-func (r *AutoDetectUnifiedResolver) extractComponentSignature(obj types.Object, pkgPath string, pos parser.Position, fileName string) (ComponentSignature, error) {
+func (r *SymbolResolver) extractComponentSignature(obj types.Object, pkgPath string, pos parser.Position, fileName string) (ComponentSignature, error) {
 	var paramInfo []ParameterInfo
 	var isStruct, isPointerRecv bool
 
@@ -290,13 +287,13 @@ func (r *AutoDetectUnifiedResolver) extractComponentSignature(obj types.Object, 
 }
 
 // extractSignature extracts component signature information from a types.Object (legacy method)
-func (r *AutoDetectUnifiedResolver) extractSignature(obj types.Object, pkgPath string) ComponentSignature {
+func (r *SymbolResolver) extractSignature(obj types.Object, pkgPath string) ComponentSignature {
 	sig, _ := r.extractComponentSignature(obj, pkgPath, parser.Position{}, "")
 	return sig
 }
 
 // extractFunctionSignature extracts signature from a function (templ template or Go function)
-func (r *AutoDetectUnifiedResolver) extractFunctionSignature(fn *types.Func, pkgPath string) ComponentSignature {
+func (r *SymbolResolver) extractFunctionSignature(fn *types.Func, pkgPath string) ComponentSignature {
 	sig := fn.Type().(*types.Signature)
 	params := sig.Params()
 
@@ -318,7 +315,7 @@ func (r *AutoDetectUnifiedResolver) extractFunctionSignature(fn *types.Func, pkg
 }
 
 // extractTypeSignature extracts signature from a type (struct component)
-func (r *AutoDetectUnifiedResolver) extractTypeSignature(tn *types.TypeName, pkgPath string) ComponentSignature {
+func (r *SymbolResolver) extractTypeSignature(tn *types.TypeName, pkgPath string) ComponentSignature {
 	// First verify this type actually implements the Component interface
 	isStruct, isPointerRecv := r.implementsComponent(tn.Type(), tn.Pkg())
 	if !isStruct {
@@ -339,8 +336,14 @@ func (r *AutoDetectUnifiedResolver) extractTypeSignature(tn *types.TypeName, pkg
 
 // ExtractSignatures walks through a templ file and extracts all template signatures
 // This replaces the functionality of TemplSignatureResolver.ExtractSignatures
-func (r *AutoDetectUnifiedResolver) ExtractSignatures(tf *parser.TemplateFile) {
-	r.localTemplates = make(map[string]ComponentSignature) // Clear previous templates
+func (r *SymbolResolver) ExtractSignatures(tf *parser.TemplateFile) {
+	// Clear previous local templates from cache
+	// Find and remove all keys starting with "local:"
+	for key := range r.signatures {
+		if strings.HasPrefix(key, "local:") {
+			delete(r.signatures, key)
+		}
+	}
 	
 	for _, node := range tf.Nodes {
 		switch n := node.(type) {
@@ -357,58 +360,58 @@ func (r *AutoDetectUnifiedResolver) ExtractSignatures(tf *parser.TemplateFile) {
 }
 
 // GetLocalTemplate returns a local template signature by name
-func (r *AutoDetectUnifiedResolver) GetLocalTemplate(name string) (ComponentSignature, bool) {
-	sig, ok := r.localTemplates[name]
+func (r *SymbolResolver) GetLocalTemplate(name string) (ComponentSignature, bool) {
+	sig, ok := r.signatures["local:"+name]
 	return sig, ok
 }
 
 // AddLocalTemplateAlias adds an alias for a local template
-func (r *AutoDetectUnifiedResolver) AddLocalTemplateAlias(alias, target string) {
-	if sig, ok := r.localTemplates[target]; ok {
-		r.localTemplates[alias] = sig
+func (r *SymbolResolver) AddLocalTemplateAlias(alias, target string) {
+	if sig, ok := r.signatures["local:"+target]; ok {
+		r.signatures["local:"+alias] = sig
 	}
 }
 
 // GetAllLocalTemplateNames returns all local template names for debugging
-func (r *AutoDetectUnifiedResolver) GetAllLocalTemplateNames() []string {
-	names := make([]string, 0, len(r.localTemplates))
-	for name := range r.localTemplates {
-		names = append(names, name)
+func (r *SymbolResolver) GetAllLocalTemplateNames() []string {
+	var names []string
+	for key := range r.signatures {
+		if strings.HasPrefix(key, "local:") {
+			names = append(names, strings.TrimPrefix(key, "local:"))
+		}
 	}
 	return names
 }
 
 // AddComponentSignature adds a resolved component signature for code generation
-func (r *AutoDetectUnifiedResolver) AddComponentSignature(sig ComponentSignature) {
-	r.componentSigs[sig.QualifiedName] = sig
+func (r *SymbolResolver) AddComponentSignature(sig ComponentSignature) {
+	r.signatures["qualified:"+sig.QualifiedName] = sig
 }
 
 // GetComponentSignature returns a component signature by qualified name
-func (r *AutoDetectUnifiedResolver) GetComponentSignature(qualifiedName string) (ComponentSignature, bool) {
-	sig, ok := r.componentSigs[qualifiedName]
+func (r *SymbolResolver) GetComponentSignature(qualifiedName string) (ComponentSignature, bool) {
+	sig, ok := r.signatures["qualified:"+qualifiedName]
 	return sig, ok
 }
 
 // ClearCache clears the internal cache (useful for testing or memory management)
-func (r *AutoDetectUnifiedResolver) ClearCache() {
-	r.cache = make(map[string]ComponentSignature)
+func (r *SymbolResolver) ClearCache() {
+	r.signatures = make(map[string]ComponentSignature)
 	r.overlay = make(map[string][]byte)
-	r.localTemplates = make(map[string]ComponentSignature)
-	r.componentSigs = make(map[string]ComponentSignature)
 }
 
 // CacheSize returns the number of cached signatures (useful for monitoring)
-func (r *AutoDetectUnifiedResolver) CacheSize() int {
-	return len(r.cache)
+func (r *SymbolResolver) CacheSize() int {
+	return len(r.signatures)
 }
 
-// addLocalTemplate adds a local template signature
-func (r *AutoDetectUnifiedResolver) addLocalTemplate(sig ComponentSignature) {
-	r.localTemplates[sig.Name] = sig
+// addLocalTemplate adds a local template signature to unified cache
+func (r *SymbolResolver) addLocalTemplate(sig ComponentSignature) {
+	r.signatures["local:"+sig.Name] = sig
 }
 
 // extractHTMLTemplateSignature extracts the signature from an HTML template
-func (r *AutoDetectUnifiedResolver) extractHTMLTemplateSignature(tmpl *parser.HTMLTemplate) (ComponentSignature, bool) {
+func (r *SymbolResolver) extractHTMLTemplateSignature(tmpl *parser.HTMLTemplate) (ComponentSignature, bool) {
 	// Parse the template declaration from Expression.Value using Go AST parser
 	exprValue := tmpl.Expression.Value
 	if exprValue == "" {
@@ -428,7 +431,7 @@ func (r *AutoDetectUnifiedResolver) extractHTMLTemplateSignature(tmpl *parser.HT
 }
 
 // parseTemplateSignatureFromAST parses a templ template signature using Go AST parser
-func (r *AutoDetectUnifiedResolver) parseTemplateSignatureFromAST(exprValue string) (name string, params []ParameterInfo, err error) {
+func (r *SymbolResolver) parseTemplateSignatureFromAST(exprValue string) (name string, params []ParameterInfo, err error) {
 	// Add "func " prefix to make it a valid Go function declaration for parsing
 	funcDecl := "func " + exprValue
 
@@ -464,7 +467,7 @@ func (r *AutoDetectUnifiedResolver) parseTemplateSignatureFromAST(exprValue stri
 }
 
 // extractParametersFromAST extracts parameter information from AST field list
-func (r *AutoDetectUnifiedResolver) extractParametersFromAST(fieldList *ast.FieldList) []ParameterInfo {
+func (r *SymbolResolver) extractParametersFromAST(fieldList *ast.FieldList) []ParameterInfo {
 	if fieldList == nil || len(fieldList.List) == 0 {
 		return nil
 	}
@@ -495,7 +498,7 @@ func (r *AutoDetectUnifiedResolver) extractParametersFromAST(fieldList *ast.Fiel
 }
 
 // astTypeToString converts AST type expressions to their string representation
-func (r *AutoDetectUnifiedResolver) astTypeToString(expr ast.Expr) string {
+func (r *SymbolResolver) astTypeToString(expr ast.Expr) string {
 	switch t := expr.(type) {
 	case *ast.Ident:
 		// Basic types like string, int, bool, etc.
@@ -529,7 +532,7 @@ func (r *AutoDetectUnifiedResolver) astTypeToString(expr ast.Expr) string {
 }
 
 // extractGoTypeSignatures extracts type definitions from Go code that might implement Component
-func (r *AutoDetectUnifiedResolver) extractGoTypeSignatures(goExpr *parser.TemplateFileGoExpression) {
+func (r *SymbolResolver) extractGoTypeSignatures(goExpr *parser.TemplateFileGoExpression) {
 	// Parse the Go code
 	src := "package main\n" + goExpr.Expression.Value
 	fset := token.NewFileSet()
@@ -583,7 +586,7 @@ func (r *AutoDetectUnifiedResolver) extractGoTypeSignatures(goExpr *parser.Templ
 }
 
 // isComponentRenderMethod checks if a function declaration matches the Component.Render signature
-func (r *AutoDetectUnifiedResolver) isComponentRenderMethod(fn *ast.FuncDecl) bool {
+func (r *SymbolResolver) isComponentRenderMethod(fn *ast.FuncDecl) bool {
 	// Check parameters: (ctx context.Context, w io.Writer)
 	if fn.Type.Params == nil || len(fn.Type.Params.List) != 2 {
 		return false
@@ -604,7 +607,7 @@ func (r *AutoDetectUnifiedResolver) isComponentRenderMethod(fn *ast.FuncDecl) bo
 
 // implementsComponent checks if a type implements the templ.Component interface using full type information
 // Returns (implements, isPointerReceiver)
-func (r *AutoDetectUnifiedResolver) implementsComponent(t types.Type, pkg *types.Package) (bool, bool) {
+func (r *SymbolResolver) implementsComponent(t types.Type, pkg *types.Package) (bool, bool) {
 	method, _, _ := types.LookupFieldOrMethod(t, true, pkg, "Render")
 	if method == nil {
 		return false, false
@@ -650,7 +653,7 @@ func (r *AutoDetectUnifiedResolver) implementsComponent(t types.Type, pkg *types
 }
 
 // extractStructFields extracts exported struct fields for struct components
-func (r *AutoDetectUnifiedResolver) extractStructFields(t types.Type) []ParameterInfo {
+func (r *SymbolResolver) extractStructFields(t types.Type) []ParameterInfo {
 	var structType *types.Struct
 	switch underlying := t.Underlying().(type) {
 	case *types.Struct:
