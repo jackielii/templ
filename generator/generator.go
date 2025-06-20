@@ -151,9 +151,7 @@ func (g *generator) generate() (err error) {
 	// Extract local template signatures
 	g.symbolResolver.ExtractSignatures(g.tf)
 
-	if err = g.collectAndResolveComponents(); err != nil {
-		return fmt.Errorf("failed to resolve components: %w", err)
-	}
+	// Components are now resolved on-demand during code generation
 
 	if err = g.writeCodeGeneratedComment(); err != nil {
 		return

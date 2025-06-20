@@ -49,7 +49,7 @@ func (e ComponentResolutionError) Error() string {
 // SymbolResolver automatically detects module roots and provides unified resolution
 // for both templ templates and Go components across packages
 type SymbolResolver struct {
-	signatures map[string]ComponentSignature // Unified cache for all component signatures
+	signatures map[string]ComponentSignature // Cache keyed by fully qualified names
 	overlay    map[string][]byte             // Go file overlays for templ templates
 }
 
@@ -69,17 +69,20 @@ func (r *SymbolResolver) ResolveComponentFrom(fromDir, pkgPath, componentName st
 
 // ResolveComponentWithPosition resolves a component with position information for error reporting
 func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componentName string, pos parser.Position, fileName string) (ComponentSignature, error) {
-	// Generate cache key based on context
-	var cacheKey string
+	// Generate fully qualified name as cache key
+	var qualifiedName string
 	if pkgPath == "" {
-		cacheKey = "local:" + componentName
+		// For local components, we'll determine the package path during resolution
+		qualifiedName = "" // Will be set after we determine the actual package
 	} else {
-		cacheKey = "pkg:" + pkgPath + ":" + componentName
+		qualifiedName = pkgPath + "." + componentName
 	}
 	
-	// Check unified cache first
-	if sig, ok := r.signatures[cacheKey]; ok {
-		return sig, nil
+	// Check cache first if we have a qualified name
+	if qualifiedName != "" {
+		if sig, ok := r.signatures[qualifiedName]; ok {
+			return sig, nil
+		}
 	}
 
 	// Find the module root for the directory we're starting from
@@ -167,8 +170,17 @@ func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componen
 		return ComponentSignature{}, err
 	}
 
-	// Cache the signature in unified cache
-	r.signatures[cacheKey] = sig
+	// Set the fully qualified name for caching
+	if qualifiedName == "" {
+		// For local components, use the actual package path we resolved
+		qualifiedName = pkg.PkgPath + "." + componentName
+		sig.QualifiedName = qualifiedName
+	} else {
+		sig.QualifiedName = qualifiedName
+	}
+
+	// Cache using fully qualified name
+	r.signatures[qualifiedName] = sig
 	return sig, nil
 }
 
@@ -337,47 +349,71 @@ func (r *SymbolResolver) extractTypeSignature(tn *types.TypeName, pkgPath string
 // ExtractSignatures walks through a templ file and extracts all template signatures
 // This replaces the functionality of TemplSignatureResolver.ExtractSignatures
 func (r *SymbolResolver) ExtractSignatures(tf *parser.TemplateFile) {
-	// Clear previous local templates from cache
-	// Find and remove all keys starting with "local:"
-	for key := range r.signatures {
-		if strings.HasPrefix(key, "local:") {
-			delete(r.signatures, key)
-		}
+	// Determine the package path for this template file
+	var packagePath string
+	if tf.Package.Expression.Value != "" {
+		packagePath = tf.Package.Expression.Value
+	} else {
+		packagePath = "main" // fallback
 	}
+	
+	// TODO: Get actual module path for fully qualified names
+	// For now, we'll use simple package names and enhance later
 	
 	for _, node := range tf.Nodes {
 		switch n := node.(type) {
 		case *parser.HTMLTemplate:
 			sig, ok := r.extractHTMLTemplateSignature(n)
 			if ok {
-				r.addLocalTemplate(sig)
+				sig.PackagePath = packagePath
+				sig.QualifiedName = packagePath + "." + sig.Name
+				r.signatures[sig.QualifiedName] = sig
 			}
 		case *parser.TemplateFileGoExpression:
 			// Extract type definitions that might implement Component
-			r.extractGoTypeSignatures(n)
+			r.extractGoTypeSignatures(n, packagePath)
 		}
 	}
 }
 
-// GetLocalTemplate returns a local template signature by name
+// GetLocalTemplate returns a local template signature by name  
+// This method is for backward compatibility - prefer using fully qualified names
 func (r *SymbolResolver) GetLocalTemplate(name string) (ComponentSignature, bool) {
-	sig, ok := r.signatures["local:"+name]
-	return sig, ok
+	// Search for any signature ending with the component name
+	// This is a temporary compatibility method
+	for qualifiedName, sig := range r.signatures {
+		if strings.HasSuffix(qualifiedName, "."+name) {
+			return sig, true
+		}
+	}
+	return ComponentSignature{}, false
 }
 
 // AddLocalTemplateAlias adds an alias for a local template
 func (r *SymbolResolver) AddLocalTemplateAlias(alias, target string) {
-	if sig, ok := r.signatures["local:"+target]; ok {
-		r.signatures["local:"+alias] = sig
+	// Find the target signature
+	for qualifiedName, sig := range r.signatures {
+		if strings.HasSuffix(qualifiedName, "."+target) {
+			// Create alias with same package path
+			parts := strings.Split(qualifiedName, ".")
+			if len(parts) >= 2 {
+				packagePath := strings.Join(parts[:len(parts)-1], ".")
+				aliasQualifiedName := packagePath + "." + alias
+				r.signatures[aliasQualifiedName] = sig
+			}
+			break
+		}
 	}
 }
 
 // GetAllLocalTemplateNames returns all local template names for debugging
 func (r *SymbolResolver) GetAllLocalTemplateNames() []string {
 	var names []string
-	for key := range r.signatures {
-		if strings.HasPrefix(key, "local:") {
-			names = append(names, strings.TrimPrefix(key, "local:"))
+	for qualifiedName := range r.signatures {
+		// Extract just the component name from the qualified name
+		parts := strings.Split(qualifiedName, ".")
+		if len(parts) >= 2 {
+			names = append(names, parts[len(parts)-1])
 		}
 	}
 	return names
@@ -385,12 +421,12 @@ func (r *SymbolResolver) GetAllLocalTemplateNames() []string {
 
 // AddComponentSignature adds a resolved component signature for code generation
 func (r *SymbolResolver) AddComponentSignature(sig ComponentSignature) {
-	r.signatures["qualified:"+sig.QualifiedName] = sig
+	r.signatures[sig.QualifiedName] = sig
 }
 
 // GetComponentSignature returns a component signature by qualified name
 func (r *SymbolResolver) GetComponentSignature(qualifiedName string) (ComponentSignature, bool) {
-	sig, ok := r.signatures["qualified:"+qualifiedName]
+	sig, ok := r.signatures[qualifiedName]
 	return sig, ok
 }
 
@@ -405,9 +441,9 @@ func (r *SymbolResolver) CacheSize() int {
 	return len(r.signatures)
 }
 
-// addLocalTemplate adds a local template signature to unified cache
+// addLocalTemplate adds a local template signature to cache
 func (r *SymbolResolver) addLocalTemplate(sig ComponentSignature) {
-	r.signatures["local:"+sig.Name] = sig
+	r.signatures[sig.QualifiedName] = sig
 }
 
 // extractHTMLTemplateSignature extracts the signature from an HTML template
@@ -532,7 +568,7 @@ func (r *SymbolResolver) astTypeToString(expr ast.Expr) string {
 }
 
 // extractGoTypeSignatures extracts type definitions from Go code that might implement Component
-func (r *SymbolResolver) extractGoTypeSignatures(goExpr *parser.TemplateFileGoExpression) {
+func (r *SymbolResolver) extractGoTypeSignatures(goExpr *parser.TemplateFileGoExpression, packagePath string) {
 	// Parse the Go code
 	src := "package main\n" + goExpr.Expression.Value
 	fset := token.NewFileSet()
@@ -571,8 +607,9 @@ func (r *SymbolResolver) extractGoTypeSignatures(goExpr *parser.TemplateFileGoEx
 
 						// This type implements Component
 						sig := ComponentSignature{
-							PackagePath:   "",
+							PackagePath:   packagePath,
 							Name:          receiverType,
+							QualifiedName: packagePath + "." + receiverType,
 							Parameters:    []ParameterInfo{}, // Component types have no parameters
 							IsStruct:      true,
 							IsPointerRecv: isPointerRecv,

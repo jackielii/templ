@@ -416,9 +416,10 @@ func (g *generator) writeRestAppend(indentLevel int, restVarName string, key str
 }
 
 func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser.ElementComponent) (err error) {
-	sigs, ok := g.symbolResolver.GetComponentSignature(n.Name)
-	if !ok {
-		return fmt.Errorf("component %s signature not found at %s:%d:%d", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col)
+	// Try to resolve component on-demand
+	sigs, err := g.resolveElementComponent(n)
+	if err != nil {
+		return fmt.Errorf("component %s at %s:%d:%d: %w", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col, err)
 	}
 
 	var vars []string
@@ -693,99 +694,85 @@ func (g *generator) parseImportPathFallback(goCode, packageAlias string) string 
 	return ""
 }
 
-func (g *generator) collectAndResolveComponents() error {
-	collector := NewElementComponentCollector()
-	_ = collector.Collect(g.tf)
-
-	uniqueComponents := collector.GetUniqueComponents()
-
-	if len(uniqueComponents) == 0 {
-		return nil
+// resolveElementComponent resolves a component on-demand during code generation
+func (g *generator) resolveElementComponent(n *parser.ElementComponent) (ComponentSignature, error) {
+	// First check if we already have this component in cache
+	if sig, ok := g.symbolResolver.GetComponentSignature(n.Name); ok {
+		return sig, nil
 	}
-
-	for _, comp := range uniqueComponents {
-		var sig ComponentSignature
-		var err error
-		var found bool
-
-		if comp.PackageName == "" {
-			// Local component - check unified resolver first
-			// First try local templates
-			if templSig, ok := g.symbolResolver.GetLocalTemplate(comp.Name); ok {
-				sig = templSig
-				found = true
+	
+	// Parse component name to determine if it's a package import or local
+	var packageName, componentName string
+	if strings.Contains(n.Name, ".") {
+		parts := strings.Split(n.Name, ".")
+		if len(parts) == 2 {
+			// Check if this is a package import by looking for the import
+			importPath := g.resolveImportPath(parts[0])
+			if importPath != "" {
+				// This is definitely a package import
+				packageName = parts[0]
+				componentName = parts[1]
 			} else {
-				// If this looks like a struct method (var.Method), try to resolve it
-				if strings.Contains(comp.Name, ".") {
-					found = g.tryResolveStructMethod(comp.Name)
-					if found {
-						// Find the resolved signature in local templates
-						if templSig, ok := g.symbolResolver.GetLocalTemplate(comp.Name); ok {
-							sig = templSig
-						}
-					}
-				}
-
-				if !found {
-					// Use unified resolver for local package resolution
-					currentPkgPath, pkgErr := g.getCurrentPackagePath()
-					if pkgErr == nil {
-						sig, err = g.symbolResolver.ResolveComponentFrom(g.currentFileDir(), currentPkgPath, comp.Name)
-						if err == nil {
-							found = true
-						}
-					} else {
-						err = pkgErr
-					}
-				}
+				// No import found - treat as local component (structVar.Method)
+				componentName = n.Name
 			}
 		} else {
-			// Package import - use unified resolver with resolved import path
-			importPath := g.resolveImportPath(comp.PackageName)
-			if importPath != "" {
-				sig, err = g.symbolResolver.ResolveComponentFrom(g.currentFileDir(), importPath, comp.Name)
-				if err == nil {
-					found = true
-				}
-			}
+			// More than 2 parts or other cases - treat as local
+			componentName = n.Name
 		}
-
-		if !found {
-			var message string
-			if err != nil {
-				if comp.PackageName != "" {
-					message = fmt.Sprintf("Component %s.%s: %v", comp.PackageName, comp.Name, err)
-				} else {
-					message = fmt.Sprintf("Component %s: %v", comp.Name, err)
-				}
-			} else {
-				if comp.PackageName != "" {
-					message = fmt.Sprintf("Component %s.%s not found in templ templates or Go functions", comp.PackageName, comp.Name)
-				} else {
-					message = fmt.Sprintf("Component %s not found in templ templates or Go functions", comp.Name)
-				}
-			}
-
-			// Add diagnostic for this missing component
-			g.addComponentDiagnostic(comp, message)
-			continue
-		}
-
-		// Store the signature for use during code generation
-		key := comp.Name
-		if comp.PackageName != "" {
-			key = comp.PackageName + "." + comp.Name
-		}
-		sig.QualifiedName = key
-		g.symbolResolver.AddComponentSignature(sig)
+	} else {
+		// No dots - definitely local
+		componentName = n.Name
 	}
+	
+	var sig ComponentSignature
+	var err error
+	
+	if packageName != "" {
+		// Cross-package component
+		importPath := g.resolveImportPath(packageName)
+		if importPath == "" {
+			return ComponentSignature{}, fmt.Errorf("import path not found for package %s", packageName)
+		}
+		sig, err = g.symbolResolver.ResolveComponentFrom(g.currentFileDir(), importPath, componentName)
+	} else {
+		// Local component - first try local templates
+		if localSig, ok := g.symbolResolver.GetLocalTemplate(componentName); ok {
+			return localSig, nil
+		}
+		
+		// If this looks like a struct method (var.Method), try to resolve it
+		if strings.Contains(componentName, ".") {
+			if g.tryResolveStructMethod(componentName) {
+				// Try again after resolution
+				if localSig, ok := g.symbolResolver.GetLocalTemplate(componentName); ok {
+					return localSig, nil
+				}
+			}
+		}
+		
+		// If still not found, try current package
+		currentPkgPath, pkgErr := g.getCurrentPackagePath()
+		if pkgErr != nil {
+			return ComponentSignature{}, pkgErr
+		}
+		sig, err = g.symbolResolver.ResolveComponentFrom(g.currentFileDir(), currentPkgPath, componentName)
+	}
+	
+	if err != nil {
+		return ComponentSignature{}, err
+	}
+	
+	// Cache the resolved signature for future use
+	sig.QualifiedName = n.Name
+	g.symbolResolver.AddComponentSignature(sig)
+	
+	return sig, nil
+}
 
-	// Don't return an error if no component signatures are resolved
-	// Instead, let the diagnostics be reported to the LSP
-	// The code generation will handle missing components gracefully
-	// if len(g.componentSigs) == 0 && len(uniqueComponents) > 0 {
-	// }
-
+// collectAndResolveComponents is no longer needed - components are resolved on-demand
+// This function is kept for backward compatibility but does nothing
+func (g *generator) collectAndResolveComponents() error {
 	return nil
 }
 
