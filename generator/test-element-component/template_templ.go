@@ -874,7 +874,7 @@ func Count(i int) templ.Component {
 		var templ_7745c5c3_Var43 string
 		templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(i)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 195, Col: 9}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `generator/test-element-component/template.templ`, Line: 195, Col: 10}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
 		if templ_7745c5c3_Err != nil {

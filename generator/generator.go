@@ -17,7 +17,6 @@ import (
 	_ "embed"
 
 	"github.com/a-h/templ/parser/v2"
-	"golang.org/x/tools/go/packages"
 )
 
 type GenerateOpt func(g *generator) error
@@ -202,28 +201,6 @@ func (g *generator) currentFileDir() string {
 		return cwd
 	}
 	return "."
-}
-
-// getCurrentPackagePath returns the Go package path for the current template file
-func (g *generator) getCurrentPackagePath() (string, error) {
-	// Unified resolver is always available
-
-	// Use packages.Load to find the current package path
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedModule,
-		Dir:  g.currentFileDir(),
-	}
-
-	pkgs, err := packages.Load(cfg, ".")
-	if err != nil {
-		return "", fmt.Errorf("failed to load current package: %w", err)
-	}
-
-	if len(pkgs) == 0 {
-		return "", fmt.Errorf("no package found in current directory")
-	}
-
-	return pkgs[0].PkgPath, nil
 }
 
 // See https://pkg.go.dev/cmd/go#hdr-Generate_Go_files_by_processing_source

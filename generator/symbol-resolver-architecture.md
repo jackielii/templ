@@ -4,7 +4,7 @@ This document provides an in-depth analysis of the symbol resolution system in t
 
 ## Overview
 
-The symbol resolver is the central component for type resolution in templ, enabling proper type checking and code generation for templ templates. It leverages Go's type system through overlays instead of string-based parsing.
+The symbol resolver is the central component for type resolution in templ, enabling proper type checking and code generation for templ templates. It leverages Go's type system through overlays instead of string-based parsing. The system has been unified into a single resolver that combines component, variable, and expression resolution capabilities.
 
 ## Core Design Principles
 
@@ -29,109 +29,109 @@ The symbol resolver is the central component for type resolution in templ, enabl
 
 ## Key Components
 
-### ComponentSignature
-Represents a component's type information:
+### componentSignature (Unified)
+Represents a component's type information (now unexported):
 ```go
-type ComponentSignature struct {
-    PackagePath   string
-    Name          string
-    QualifiedName string          // Fully qualified name for caching
-    Parameters    []ParameterInfo // Function params or struct fields
-    IsStruct      bool            // Whether it's a struct implementing Component
-    IsPointerRecv bool            // For struct methods with pointer receivers
+type componentSignature struct {
+    name       string
+    parameters []parameterInfo
+    isStruct   bool
+    isCached   bool
 }
 ```
 
-### ParameterInfo
-Rich type information for parameters/fields:
+### parameterInfo (Unified)
+Rich type information for parameters/fields (now unexported):
 ```go
-type ParameterInfo struct {
-    Name         string
-    Type         string // String representation
-    IsComponent  bool   // Implements templ.Component
-    IsAttributer bool   // Implements templ.Attributer
-    IsPointer    bool
-    IsSlice      bool
-    IsMap        bool
-    IsString     bool
-    IsBool       bool
+type parameterInfo struct {
+    name         string
+    typ          string // String representation
+    isComponent  bool   // Implements templ.Component
+    isAttributer bool   // Implements templ.Attributer
+    isPointer    bool
+    isSlice      bool
+    isMap        bool
+    isString     bool
+    isBool       bool
 }
 ```
 
-### GeneratorContext
-Tracks position in AST during generation:
+### generatorContext (Unified)
+Tracks position in AST during generation with enhanced scope management:
 ```go
-type GeneratorContext struct {
-    CurrentTemplate *parser.HTMLTemplate // Current template being generated
-    ASTPath         []parser.Node        // Path from root to current node
-    LocalScopes     []LocalScope         // Stack of local scopes
+type generatorContext struct {
+    currentTemplate *parser.HTMLTemplate
+    scopes         []localScope
+}
+
+type localScope struct {
+    node      parser.Node
+    variables map[string]*symbolTypeInfo
 }
 ```
 
-## Main Entry Points
+## Main Entry Points (Unified System)
 
-### 1. ResolveElementComponent
-Primary method for resolving components in element syntax:
+### 1. resolveComponent (Internal)
+Primary method for resolving components (replaces ResolveElementComponent):
 ```go
-func (r *SymbolResolver) ResolveElementComponent(
-    fromDir, currentPkg string, 
-    componentName string, 
-    tf *parser.TemplateFile
-) (ComponentSignature, error)
+func (r *symbolResolver) resolveComponent(
+    fromDir, currentPkg string,
+    componentName string
+) (componentSignature, error)
 ```
 
 **Resolution strategies:**
-- Simple names: Local component in current package
-- Dotted names with import alias: Cross-package component (e.g., `mod.Button`)
-- Dotted names without alias: Struct method component (e.g., `myStruct.Render`)
+- Simple names: Local component via template cache
+- Dotted names: Delegate to resolveExpression for full type analysis
+- Automatic module directory detection via modcheck.WalkUp
 
-### 2. ResolveExpression
-Determines type information for expressions:
+### 2. resolveExpression (Enhanced)
+Determines type information for expressions with full context awareness:
 ```go
-func (r *SymbolResolver) ResolveExpression(
-    expr string, 
-    ctx GeneratorContext, 
+func (r *symbolResolver) resolveExpression(
+    expr string,
+    ctx *generatorContext,
     fromDir string
-) (*TypeInfo, error)
+) (*symbolTypeInfo, error)
 ```
 
 **Resolution order:**
-1. Local scopes (innermost to outermost)
+1. Local scopes (innermost to outermost) - includes for/if variables
 2. Template parameters (if inside a template)
-3. Package-level symbols
+3. Package-level symbols via packages.Load
+4. Method resolution on struct types
+5. Field access resolution
 
-### 3. Register
-Creates overlays for templ files:
-```go
-func (r *SymbolResolver) Register(
-    tf *parser.TemplateFile, 
-    fileName string
-) error
-```
+### 3. Unified Resolution System
+The unified resolver combines:
+- **Template caching**: Local templates cached for fast lookup
+- **Expression resolution**: Full Go expression type analysis
+- **Variable extraction**: Automatic extraction of for/if variables
+- **Context tracking**: Proper scope management during generation
 
 ## Usage Patterns
 
 ### In Element Component Generation
 From `generator_element_component.go`:
 
-1. **Component Resolution** (line 464):
+1. **Component Resolution** (simplified):
 ```go
-sigs, err := g.symbolResolver.ResolveElementComponent(
+sig, err := g.symbolResolver.resolveComponent(
     g.currentFileDir(), 
     currentPkgPath, 
-    n.Name, 
-    g.tf
+    n.Name
 )
 ```
 
-2. **Expression Type Checking** (line 177):
+2. **Expression Type Checking** (enhanced context):
 ```go
-typeInfo, err := g.symbolResolver.ResolveExpression(
+typeInfo, err := g.symbolResolver.resolveExpression(
     exprValue, 
-    *g.context, 
+    g.context, 
     g.currentFileDir()
 )
-if err == nil && typeInfo.IsComponent {
+if err == nil && typeInfo.isComponent {
     // Expression is definitely a component
 }
 ```
@@ -145,71 +145,99 @@ The resolver distinguishes between:
 
 ## Implementation Details
 
-### Overlay Generation
-The `generateOverlay` method creates minimal Go code that's sufficient for type checking:
-- Preserves all imports and top-level Go code
-- Creates function stubs for templates
-- Ensures templ-specific imports are present
+### Unified Resolver Architecture
+The unified `symbolResolver` combines multiple resolution strategies:
+
+1. **Template Caching**: All local templates cached during initialization
+2. **Expression Analysis**: Full Go expression parsing with AST
+3. **Context Management**: Proper scope tracking with variable extraction
+4. **Module Detection**: Automatic go.mod detection via modcheck.WalkUp
 
 ### Type Analysis
-Two levels of type analysis:
-1. **AST-based** (for overlays): Basic type identification from syntax
-2. **Full type checking** (via packages.Load): Complete type information including interface satisfaction
+Three levels of type analysis:
+1. **Template-based**: Direct lookup from cached templ components
+2. **AST-based**: Expression parsing for variable/field access
+3. **Full type checking** (via packages.Load): Complete type information including interface satisfaction
 
 ### Caching Strategy
-- Component signatures cached by fully qualified name
-- Package information cached by directory
-- Overlays retained for the resolver's lifetime
+- Local templates cached at resolver initialization
+- Package information cached by import path
+- Type information cached with full expression analysis
+- Automatic module directory detection and caching
 
 ## Error Handling
 
-The resolver provides position-aware errors via `ComponentResolutionError`:
-- Includes file name, line, and column information
-- Gracefully handles packages with compilation errors in generated files
-- Distinguishes between generated file errors (ignored) and source errors
+The unified resolver provides enhanced error handling:
+- Context-aware error messages with proper scope information
+- Graceful fallback for missing components
+- Automatic module boundary detection
+- Clear distinction between local and cross-package resolution failures
 
 ## Performance Considerations
 
-1. **Batch Processing**: `processTemplFiles` processes all templ files in a directory at once
-2. **Lazy Loading**: Packages only loaded when needed
-3. **Caching**: Extensive caching of packages and signatures
-4. **Overlay Reuse**: Overlays generated once and reused
+1. **Upfront Template Caching**: All local templates cached at initialization
+2. **Lazy Package Loading**: External packages loaded only when needed
+3. **Expression Caching**: Parsed expressions cached for reuse
+4. **Module Detection**: go.mod location cached per directory
+5. **Minimal AST Parsing**: Only parse what's needed for resolution
+
+## Key Improvements in Unified System
+
+### 1. Variable Extraction
+Automatic extraction of variables from control flow:
+- **For loops**: Extract index and value variables with types
+- **If statements**: Extract short variable declarations
+- **Proper scoping**: Variables only visible within their scope
+
+### 2. Context-Aware Resolution
+- Full AST path tracking during generation
+- Nested scope support for complex templates
+- Template parameter injection into scope
+
+### 3. Expression Parsing
+Enhanced expression analysis:
+- Method calls on struct variables
+- Field access resolution
+- Slice/map indexing support
+- Type assertion handling
+
+### 4. Module Boundary Detection
+- Automatic go.mod detection via modcheck.WalkUp
+- Proper package resolution across module boundaries
+- Cached module locations for performance
 
 ## Future Enhancement Opportunities
 
-### 1. On-demand Overlay Generation
-Instead of processing all templ files in a directory, generate overlays only for:
-- The current file being processed
-- Files that are imported/referenced
+### 1. Generic Type Support
+- Track generic type parameters through expressions
+- Support type inference for generic components
 
-### 2. Incremental Updates
-For IDE/LSP scenarios:
-- Support updating individual overlays
-- Track dependencies between files
-- Minimal reprocessing on changes
+### 2. Advanced Control Flow
+- Switch statement type narrowing
+- Range over map key/value type extraction
+- Select statement channel type analysis
 
-### 3. Enhanced Context Tracking
-- Type narrowing from type assertions
-- Switch case type tracking
-- Import alias resolution at context level
-
-### 4. Parallel Resolution
-- Batch multiple `ResolveElementComponent` calls
-- Parallel package loading for cross-package components
-
-### 5. Type Inference Improvements
-- Method chain resolution
-- Generic type parameter tracking
-- Interface satisfaction caching
+### 3. Performance Optimizations
+- Parallel package loading for multiple imports
+- Incremental cache updates for file changes
+- AST node reuse for common patterns
 
 ## Integration Points
 
-The symbol resolver integrates with:
-1. **Code Generator**: Provides type information during generation
-2. **Parser**: Receives AST nodes for analysis
-3. **LSP**: Could provide hover information and go-to-definition
-4. **Formatter**: Could provide type-aware formatting decisions
+The unified symbol resolver integrates with:
+1. **Code Generator**: Provides type information with full context awareness
+2. **Parser**: Receives AST nodes for analysis and variable extraction
+3. **LSP**: Enhanced diagnostics with proper type resolution
+4. **Formatter**: Skip resolution option for performance when not needed
+5. **Import Processing**: Automatic module detection for proper resolution
 
 ## Conclusion
 
-The symbol resolver represents a sophisticated approach to type resolution in a template language, leveraging Go's type system while maintaining the template files as the source of truth. Its overlay-based design enables accurate type checking without requiring generated files to exist on disk, making it suitable for both CLI and IDE scenarios.
+The unified symbol resolver represents a significant evolution in templ's type resolution capabilities. By combining template caching, expression analysis, and context-aware variable tracking into a single cohesive system, it provides:
+
+- **Better Developer Experience**: Accurate type information throughout templates
+- **Enhanced Safety**: Proper variable scoping and type checking
+- **Improved Performance**: Strategic caching and lazy loading
+- **Cleaner Architecture**: Single resolver instead of multiple systems
+
+The system maintains Go's type safety while providing the flexibility needed for a template language, making it suitable for both CLI generation and IDE integration scenarios.

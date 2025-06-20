@@ -564,7 +564,6 @@ func (r *symbolResolver) getLocalTemplate(name string) (componentSignature, bool
 	return componentSignature{}, false
 }
 
-
 // resolveExpression resolves an expression with context awareness
 func (r *symbolResolver) resolveExpression(expr string, ctx *generatorContext, fromDir string) (*symbolTypeInfo, error) {
 	expr = strings.TrimSpace(expr)
@@ -942,7 +941,6 @@ func (ctx *generatorContext) addVariable(name string, typeInfo *symbolTypeInfo) 
 		currentScope.variables[name] = typeInfo
 	}
 }
-
 
 // setCurrentTemplate sets the current template being generated
 func (ctx *generatorContext) setCurrentTemplate(tmpl *parser.HTMLTemplate) {

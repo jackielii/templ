@@ -476,7 +476,7 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 		}
 
 		// Try to resolve component on-demand
-		currentPkgPath, _ := g.getCurrentPackagePath()
+		currentPkgPath, _ := g.symbolResolver.getPackagePathFromDir(g.currentFileDir())
 		sigs, err = g.symbolResolver.resolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
 		if err != nil {
 			return fmt.Errorf("component %s at %s:%d:%d: %w", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col, err)
