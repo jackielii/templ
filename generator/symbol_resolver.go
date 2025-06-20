@@ -389,18 +389,6 @@ func (r *SymbolResolver) ResolveComponentWithPosition(fromDir, pkgPath, componen
 	return sig, nil
 }
 
-// ResolveComponent resolves from current working directory (for compatibility)
-func (r *SymbolResolver) ResolveComponent(pkgPath, componentName string) (ComponentSignature, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ComponentSignature{}, fmt.Errorf("failed to get working directory: %w", err)
-	}
-	return r.ResolveComponentFrom(cwd, pkgPath, componentName)
-}
-
-// processTemplFiles finds and parses .templ files in the package directory,
-// generating Go stub overlays for each templ template
-
 // generateOverlay creates Go stub code for templ templates
 func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string) string {
 	var sb strings.Builder
@@ -768,22 +756,6 @@ func (r *SymbolResolver) GetComponentSignature(qualifiedName string) (ComponentS
 	return sig, ok
 }
 
-// ClearCache clears the internal cache (useful for testing or memory management)
-func (r *SymbolResolver) ClearCache() {
-	r.signatures = make(map[string]ComponentSignature)
-	r.overlay = make(map[string][]byte)
-}
-
-// CacheSize returns the number of cached signatures (useful for monitoring)
-func (r *SymbolResolver) CacheSize() int {
-	return len(r.signatures)
-}
-
-// addLocalTemplate adds a local template signature to cache
-func (r *SymbolResolver) addLocalTemplate(sig ComponentSignature) {
-	r.signatures[sig.QualifiedName] = sig
-}
-
 // parseTemplateSignatureFromAST parses a templ template signature using Go AST parser
 func (r *SymbolResolver) parseTemplateSignatureFromAST(exprValue string) (name string, params []ParameterInfo, err error) {
 	// Add "func " prefix to make it a valid Go function declaration for parsing
@@ -941,81 +913,6 @@ func (r *SymbolResolver) astTypeToString(expr ast.Expr) string {
 	}
 }
 
-// extractGoTypeSignatures extracts type definitions from Go code that might implement Component
-func (r *SymbolResolver) extractGoTypeSignatures(goExpr *parser.TemplateFileGoExpression, packagePath string) {
-	// Parse the Go code
-	src := "package main\n" + goExpr.Expression.Value
-	fset := token.NewFileSet()
-	node, err := goparser.ParseFile(fset, "", src, goparser.AllErrors)
-	if err != nil || node == nil {
-		return
-	}
-
-	// Look for type declarations and methods
-	typeNames := make(map[string]bool)
-
-	// First pass: collect all type names
-	for _, decl := range node.Decls {
-		if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.TYPE {
-			for _, spec := range genDecl.Specs {
-				if typeSpec, ok := spec.(*ast.TypeSpec); ok {
-					typeNames[typeSpec.Name.Name] = true
-				}
-			}
-		}
-	}
-
-	// Second pass: look for Render methods on these types
-	for _, decl := range node.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "Render" && fn.Recv != nil {
-			// Check if this is a method on one of our types
-			if len(fn.Recv.List) > 0 {
-				receiverType := r.astTypeToString(fn.Recv.List[0].Type)
-				receiverType = strings.TrimPrefix(receiverType, "*")
-
-				if typeNames[receiverType] {
-					// Check if the signature matches Component.Render
-					if r.isComponentRenderMethod(fn) {
-						// Check if receiver is a pointer
-						isPointerRecv := strings.HasPrefix(r.astTypeToString(fn.Recv.List[0].Type), "*")
-
-						// This type implements Component
-						sig := ComponentSignature{
-							PackagePath:   packagePath,
-							Name:          receiverType,
-							QualifiedName: packagePath + "." + receiverType,
-							Parameters:    []ParameterInfo{}, // Component types have no parameters
-							IsStruct:      true,
-							IsPointerRecv: isPointerRecv,
-						}
-						r.addLocalTemplate(sig)
-					}
-				}
-			}
-		}
-	}
-}
-
-// isComponentRenderMethod checks if a function declaration matches the Component.Render signature
-func (r *SymbolResolver) isComponentRenderMethod(fn *ast.FuncDecl) bool {
-	// Check parameters: (ctx context.Context, w io.Writer)
-	if fn.Type.Params == nil || len(fn.Type.Params.List) != 2 {
-		return false
-	}
-
-	// Check return type: error
-	if fn.Type.Results == nil || len(fn.Type.Results.List) != 1 {
-		return false
-	}
-
-	// Check if return type is error
-	if retType, ok := fn.Type.Results.List[0].Type.(*ast.Ident); !ok || retType.Name != "error" {
-		return false
-	}
-
-	return true
-}
-
 // implementsComponent checks if a type implements the templ.Component interface using full type information
 // Returns (implements, isPointerReceiver)
 func (r *SymbolResolver) implementsComponent(t types.Type, pkg *types.Package) (bool, bool) {
@@ -1082,9 +979,9 @@ func (r *SymbolResolver) analyzeParameterType(name string, t types.Type) Paramet
 		isPointer = true
 		// Check what the pointer points to
 		pointee := underlying.Elem().Underlying()
-		switch pointee.(type) {
+		switch pointee := pointee.(type) {
 		case *types.Basic:
-			basic := pointee.(*types.Basic)
+			basic := pointee
 			isString = basic.Kind() == types.String
 			isBool = basic.Kind() == types.Bool
 		}
@@ -1191,11 +1088,6 @@ func (r *SymbolResolver) extractStructFieldsWithTypeAnalysis(t types.Type) []Par
 	return fields
 }
 
-// extractStructFields extracts exported struct fields for struct components (legacy compatibility)
-func (r *SymbolResolver) extractStructFields(t types.Type) []ParameterInfo {
-	return r.extractStructFieldsWithTypeAnalysis(t)
-}
-
 // getTemplateName extracts the template name from an HTMLTemplate node
 func getTemplateName(tmpl *parser.HTMLTemplate) string {
 	if tmpl == nil {
@@ -1224,109 +1116,6 @@ func getTemplateName(tmpl *parser.HTMLTemplate) string {
 		return strings.TrimSpace(exprValue[:idx])
 	}
 	return exprValue
-}
-
-// extractStructMethodInfo extracts receiver type and method name from a struct method template
-func extractStructMethodInfo(tmpl *parser.HTMLTemplate) (receiver string, methodName string) {
-	if tmpl == nil {
-		return "", ""
-	}
-
-	exprValue := strings.TrimSpace(tmpl.Expression.Value)
-
-	// Check if this is a struct method template: (ReceiverType) MethodName(...)
-	if !strings.HasPrefix(exprValue, "(") {
-		return "", ""
-	}
-
-	// Find the closing parenthesis for the receiver
-	idx := strings.Index(exprValue, ")")
-	if idx == -1 {
-		return "", ""
-	}
-
-	// Extract receiver (without parentheses)
-	receiverPart := strings.TrimSpace(exprValue[1:idx])
-	// Remove pointer if present
-	receiverPart = strings.TrimPrefix(receiverPart, "*")
-	receiverPart = strings.TrimSpace(receiverPart)
-
-	// Extract method name
-	methodPart := strings.TrimSpace(exprValue[idx+1:])
-	if methodIdx := strings.Index(methodPart, "("); methodIdx != -1 {
-		methodName = strings.TrimSpace(methodPart[:methodIdx])
-	} else {
-		methodName = methodPart
-	}
-
-	return receiverPart, methodName
-}
-
-// extractTemplateParams extracts parameters from a template expression
-func extractTemplateParams(expr parser.Expression) []ParameterInfo {
-	var params []ParameterInfo
-
-	// Parse the parameters from the expression
-	// Format: "TemplateName(param1 type1, param2 type2)" or "(Receiver) MethodName(param1 type1)"
-	exprValue := strings.TrimSpace(expr.Value)
-
-	// Skip receiver part if this is a struct method
-	if strings.HasPrefix(exprValue, "(") {
-		if idx := strings.Index(exprValue, ")"); idx != -1 {
-			// Use the part after the receiver
-			exprValue = strings.TrimSpace(exprValue[idx+1:])
-		}
-	}
-
-	if idx := strings.Index(exprValue, "("); idx != -1 {
-		if endIdx := strings.LastIndex(exprValue, ")"); endIdx != -1 {
-			paramsStr := exprValue[idx+1 : endIdx]
-			if paramsStr != "" {
-				// Split by comma
-				paramParts := strings.Split(paramsStr, ",")
-				for _, part := range paramParts {
-					part = strings.TrimSpace(part)
-					if part == "" {
-						continue
-					}
-
-					// Find the last space to separate name from type
-					lastSpace := strings.LastIndex(part, " ")
-					if lastSpace != -1 {
-						name := strings.TrimSpace(part[:lastSpace])
-						typeStr := strings.TrimSpace(part[lastSpace+1:])
-						params = append(params, ParameterInfo{
-							Name: name,
-							Type: typeStr,
-						})
-					}
-				}
-			}
-		}
-	}
-
-	return params
-}
-
-// analyzeParameterTypeString analyzes a parameter type from its string representation
-func (r *SymbolResolver) analyzeParameterTypeString(param *ParameterInfo) {
-	typeStr := param.Type
-
-	// Basic type analysis
-	param.IsPointer = strings.HasPrefix(typeStr, "*")
-	param.IsSlice = strings.HasPrefix(typeStr, "[]")
-	param.IsMap = strings.HasPrefix(typeStr, "map[")
-	param.IsString = typeStr == "string"
-	param.IsBool = typeStr == "bool"
-
-	// Check for known interfaces
-	if strings.HasSuffix(typeStr, "templ.Component") || typeStr == "templ.Component" {
-		param.IsComponent = true
-	}
-
-	if strings.HasSuffix(typeStr, "templ.Attributer") || typeStr == "templ.Attributer" {
-		param.IsAttributer = true
-	}
 }
 
 // GeneratorContext tracks position in AST during code generation
@@ -1479,31 +1268,6 @@ func extractIfConditionVariables(expr parser.Expression) map[string]*TypeInfo {
 						vars[varName] = &TypeInfo{
 							FullType: "interface{}",
 						}
-					}
-				}
-			}
-		}
-	}
-
-	return vars
-}
-
-// extractSwitchVariables extracts variables from switch expression
-func extractSwitchVariables(expr parser.Expression) map[string]*TypeInfo {
-	vars := make(map[string]*TypeInfo)
-
-	exprStr := strings.TrimSpace(expr.Value)
-
-	// Handle "switch x := expr; x" pattern
-	if strings.Contains(exprStr, ":=") && strings.Contains(exprStr, ";") {
-		parts := strings.Split(exprStr, ";")
-		if len(parts) > 0 && strings.Contains(parts[0], ":=") {
-			assignParts := strings.Split(parts[0], ":=")
-			if len(assignParts) >= 2 {
-				varName := strings.TrimSpace(assignParts[0])
-				if varName != "" && varName != "_" {
-					vars[varName] = &TypeInfo{
-						FullType: "interface{}",
 					}
 				}
 			}
