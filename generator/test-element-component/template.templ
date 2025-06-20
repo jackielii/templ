@@ -75,6 +75,12 @@ templ ElementComponent(attrs templ.Attributer) {
 				<span>nested</span>
 			}
 		/>
+		for i := range 0 {
+			<Count i={ i } />
+		}
+		for i := 0; i < 0; i++ {
+			<Count i={ i } />
+		}
 	</div>
 }
 
@@ -183,4 +189,8 @@ templ TestNestedComponents(content templ.Component) {
 	<Parent>
 		<Child />
 	</Parent>
+}
+
+templ Count(i int) {
+	<span>{i}</span>
 }
