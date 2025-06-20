@@ -406,14 +406,15 @@ func (r *SymbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string
 		case *parser.HTMLTemplate:
 			// Use the parsed AST if available, otherwise fall back to parsing
 			var name string
-			if n.Expression.FuncDecl == nil {
+			funcDecl, ok := n.Expression.Stmt.(*ast.FuncDecl)
+			if !ok {
 				// Skip templates without valid function declarations
 				continue
 			}
-			name = n.Expression.FuncDecl.Name.Name
+			name = funcDecl.Name.Name
 			// If this is a receiver method, create a composite name
-			if n.Expression.FuncDecl.Recv != nil && len(n.Expression.FuncDecl.Recv.List) > 0 {
-				receiverType := r.astTypeToString(n.Expression.FuncDecl.Recv.List[0].Type)
+			if funcDecl.Recv != nil && len(funcDecl.Recv.List) > 0 {
+				receiverType := r.astTypeToString(funcDecl.Recv.List[0].Type)
 				// Remove pointer indicator if present for consistent naming
 				receiverType = strings.TrimPrefix(receiverType, "*")
 				name = receiverType + "." + name
@@ -734,129 +735,6 @@ func (r *SymbolResolver) AddComponentSignature(sig ComponentSignature) {
 func (r *SymbolResolver) GetComponentSignature(qualifiedName string) (ComponentSignature, bool) {
 	sig, ok := r.signatures[qualifiedName]
 	return sig, ok
-}
-
-// parseTemplateSignatureFromAST parses a templ template signature using Go AST parser
-func (r *SymbolResolver) parseTemplateSignatureFromAST(exprValue string) (name string, params []ParameterInfo, err error) {
-	// Add "func " prefix to make it a valid Go function declaration for parsing
-	funcDecl := "func " + exprValue
-
-	// Create a temporary package to parse the function
-	src := "package main\n" + funcDecl
-
-	// Parse the source
-	fset := token.NewFileSet()
-	node, parseErr := goparser.ParseFile(fset, "", src, goparser.AllErrors)
-	if parseErr != nil || node == nil {
-		return "", nil, parseErr
-	}
-
-	// Extract function declaration from AST
-	for _, decl := range node.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok {
-			name = fn.Name.Name
-			params = r.extractParametersFromAST(fn.Type.Params)
-
-			// If this is a receiver method, create a composite name
-			if fn.Recv != nil && len(fn.Recv.List) > 0 {
-				receiverType := r.astTypeToString(fn.Recv.List[0].Type)
-				// Remove pointer indicator if present for consistent naming
-				receiverType = strings.TrimPrefix(receiverType, "*")
-				name = receiverType + "." + name
-			}
-
-			return name, params, nil
-		}
-	}
-
-	return "", nil, nil
-}
-
-// extractParametersFromAST extracts parameter information from AST field list with type analysis
-func (r *SymbolResolver) extractParametersFromAST(fieldList *ast.FieldList) []ParameterInfo {
-	if fieldList == nil || len(fieldList.List) == 0 {
-		return nil
-	}
-
-	var params []ParameterInfo
-
-	for _, field := range fieldList.List {
-		fieldType := r.astTypeToString(field.Type)
-
-		// Analyze type characteristics from AST
-		typeInfo := r.analyzeASTType(fieldType, field.Type)
-
-		// Handle multiple names with the same type (e.g., "a, b string")
-		if len(field.Names) > 0 {
-			for _, name := range field.Names {
-				param := typeInfo
-				param.Name = name.Name
-				params = append(params, param)
-			}
-		} else {
-			// Handle anonymous parameters
-			param := typeInfo
-			param.Name = ""
-			params = append(params, param)
-		}
-	}
-
-	return params
-}
-
-// analyzeASTType analyzes type characteristics from AST (for templ templates)
-func (r *SymbolResolver) analyzeASTType(typeStr string, expr ast.Expr) ParameterInfo {
-	// For templ templates, we do basic analysis based on AST structure
-	// This is less comprehensive than full type resolution but sufficient for templates
-
-	isComponent := (typeStr == "templ.Component" || typeStr == "github.com/a-h/templ.Component")
-	isAttributer := (typeStr == "templ.Attributer" || typeStr == "github.com/a-h/templ.Attributer")
-	isPointer := false
-	isSlice := false
-	isMap := false
-	isString := false
-	isBool := false
-
-	// Analyze AST structure
-	switch t := expr.(type) {
-	case *ast.Ident:
-		// Basic types: string, int, bool, etc.
-		isString = t.Name == "string"
-		isBool = t.Name == "bool"
-	case *ast.StarExpr:
-		// Pointer types
-		isPointer = true
-		if ident, ok := t.X.(*ast.Ident); ok {
-			isString = ident.Name == "string"
-			isBool = ident.Name == "bool"
-		}
-	case *ast.ArrayType:
-		// Slice or array types
-		isSlice = true
-	case *ast.MapType:
-		// Map types
-		isMap = true
-	case *ast.SelectorExpr:
-		// Qualified types like templ.Component
-		if typeStr == "templ.Component" || typeStr == "github.com/a-h/templ.Component" {
-			isComponent = true
-		}
-		if typeStr == "templ.Attributer" || typeStr == "github.com/a-h/templ.Attributer" {
-			isAttributer = true
-		}
-	}
-
-	return ParameterInfo{
-		Name:         "", // Will be set by caller
-		Type:         typeStr,
-		IsComponent:  isComponent,
-		IsAttributer: isAttributer,
-		IsPointer:    isPointer,
-		IsSlice:      isSlice,
-		IsMap:        isMap,
-		IsString:     isString,
-		IsBool:       isBool,
-	}
 }
 
 // astTypeToString converts AST type expressions to their string representation
@@ -1194,14 +1072,59 @@ func (ctx *GeneratorContext) ClearCurrentTemplate() {
 	}
 }
 
-// extractForLoopVariables extracts variables from a for expression
+// extractForLoopVariables extracts variables from a for expression using the AST
 // e.g., "for i, item := range items" -> ["i", "item"]
 func extractForLoopVariables(expr parser.Expression) map[string]*TypeInfo {
 	vars := make(map[string]*TypeInfo)
 
-	// Simple parser for common for loop patterns
-	// This is a simplified version - real implementation would be more robust
-	exprStr := strings.TrimSpace(expr.Value)
+	// Check if we have an AST node
+	if expr.Stmt == nil {
+		// Fallback to simple heuristics if no AST
+		return extractForLoopVariablesFallback(expr.Value)
+	}
+
+	switch stmt := expr.Stmt.(type) {
+	case *ast.RangeStmt:
+		// Handle "for key, value := range expr" pattern
+		if stmt.Key != nil {
+			if ident, ok := stmt.Key.(*ast.Ident); ok && ident.Name != "_" {
+				// Key is usually int for slices/arrays, string for maps
+				vars[ident.Name] = &TypeInfo{
+					FullType: "int", // Simplified - would need type analysis for maps
+				}
+			}
+		}
+		if stmt.Value != nil {
+			if ident, ok := stmt.Value.(*ast.Ident); ok && ident.Name != "_" {
+				// Value type is unknown without more context
+				vars[ident.Name] = &TypeInfo{
+					FullType: "interface{}",
+				}
+			}
+		}
+
+	case *ast.ForStmt:
+		// Handle "for i := 0; i < n; i++" pattern
+		if stmt.Init != nil {
+			if assignStmt, ok := stmt.Init.(*ast.AssignStmt); ok {
+				for _, lhs := range assignStmt.Lhs {
+					if ident, ok := lhs.(*ast.Ident); ok {
+						vars[ident.Name] = &TypeInfo{
+							FullType: "int", // Common case for loop counters
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return vars
+}
+
+// extractForLoopVariablesFallback is the fallback implementation using string parsing
+func extractForLoopVariablesFallback(exprValue string) map[string]*TypeInfo {
+	vars := make(map[string]*TypeInfo)
+	exprStr := strings.TrimSpace(exprValue)
 
 	// Handle "for i, v := range expr" pattern
 	if strings.Contains(exprStr, ":=") && strings.Contains(exprStr, "range") {
@@ -1213,16 +1136,13 @@ func extractForLoopVariables(expr parser.Expression) map[string]*TypeInfo {
 			for i, varName := range varNames {
 				varName = strings.TrimSpace(varName)
 				if varName != "" && varName != "_" {
-					// First variable in range is usually index/key
 					if i == 0 {
 						vars[varName] = &TypeInfo{
-							FullType: "int", // Simplified - could be string for maps
-							IsString: false,
+							FullType: "int",
 						}
 					} else {
-						// Second variable is the value - type unknown without more context
 						vars[varName] = &TypeInfo{
-							FullType: "interface{}", // Generic type
+							FullType: "interface{}",
 						}
 					}
 				}
@@ -1231,7 +1151,6 @@ func extractForLoopVariables(expr parser.Expression) map[string]*TypeInfo {
 	}
 
 	// Handle "for i := 0; i < n; i++" pattern
-	// The variable is available in the loop scope
 	if strings.Contains(exprStr, ";") {
 		parts := strings.Split(exprStr, ";")
 		if len(parts) > 0 && strings.Contains(parts[0], ":=") {
@@ -1251,12 +1170,40 @@ func extractForLoopVariables(expr parser.Expression) map[string]*TypeInfo {
 	return vars
 }
 
-// extractIfConditionVariables extracts variables from if condition
+// extractIfConditionVariables extracts variables from if condition using the AST
 // e.g., "if err := doSomething(); err != nil" -> ["err"]
 func extractIfConditionVariables(expr parser.Expression) map[string]*TypeInfo {
 	vars := make(map[string]*TypeInfo)
 
-	exprStr := strings.TrimSpace(expr.Value)
+	// Check if we have an AST node
+	if expr.Stmt == nil {
+		// Fallback to simple heuristics if no AST
+		return extractIfConditionVariablesFallback(expr.Value)
+	}
+
+	if ifStmt, ok := expr.Stmt.(*ast.IfStmt); ok {
+		// Check if there's an Init statement (e.g., "if x := expr; condition")
+		if ifStmt.Init != nil {
+			if assignStmt, ok := ifStmt.Init.(*ast.AssignStmt); ok {
+				for _, lhs := range assignStmt.Lhs {
+					if ident, ok := lhs.(*ast.Ident); ok && ident.Name != "_" {
+						// Without type analysis, we can't know the exact type
+						vars[ident.Name] = &TypeInfo{
+							FullType: "interface{}",
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return vars
+}
+
+// extractIfConditionVariablesFallback is the fallback implementation using string parsing
+func extractIfConditionVariablesFallback(exprValue string) map[string]*TypeInfo {
+	vars := make(map[string]*TypeInfo)
+	exprStr := strings.TrimSpace(exprValue)
 
 	// Handle short variable declaration in if condition
 	if strings.Contains(exprStr, ":=") {
@@ -1268,7 +1215,6 @@ func extractIfConditionVariables(expr parser.Expression) map[string]*TypeInfo {
 				if len(assignParts) >= 2 {
 					varName := strings.TrimSpace(assignParts[0])
 					if varName != "" && varName != "_" {
-						// Without type analysis, we can't know the exact type
 						vars[varName] = &TypeInfo{
 							FullType: "interface{}",
 						}
