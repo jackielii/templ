@@ -402,7 +402,7 @@ func generateOverlay(tf *parser.TemplateFile, pkgName string) string {
 		switch n := node.(type) {
 		case *parser.TemplateFileGoExpression:
 			exprValue := n.Expression.Value
-			
+
 			// Check if this is an import statement
 			if strings.Contains(exprValue, "import") {
 				existingImports = exprValue

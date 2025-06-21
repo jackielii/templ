@@ -4,17 +4,16 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"strings"
 )
 
 // dependencyGraph represents the package dependency structure for ElementComponent resolution
 type dependencyGraph struct {
 	// nodes maps package path to node information
 	nodes map[string]*packageNode
-	
+
 	// roots contains packages that use ElementComponent syntax
 	roots map[string]bool
-	
+
 	// internalPackages contains all packages in the dependency trees
 	// (roots and their transitive dependencies)
 	internalPackages map[string]bool
@@ -24,19 +23,19 @@ type dependencyGraph struct {
 type packageNode struct {
 	// packagePath is the import path of the package
 	packagePath string
-	
+
 	// directory is the filesystem path to the package
 	directory string
-	
+
 	// templFiles are the .templ files in this package
 	templFiles []string
-	
+
 	// hasElementComponent indicates if this package uses ElementComponent syntax
 	hasElementComponent bool
-	
+
 	// dependencies are the packages this package imports
 	dependencies []string
-	
+
 	// dependents are the packages that import this package
 	dependents []string
 }
@@ -60,7 +59,7 @@ func (g *dependencyGraph) addPackage(pkgPath, directory string, hasElementCompon
 		}
 		return node
 	}
-	
+
 	node := &packageNode{
 		packagePath:         pkgPath,
 		directory:           directory,
@@ -69,13 +68,13 @@ func (g *dependencyGraph) addPackage(pkgPath, directory string, hasElementCompon
 		dependents:          []string{},
 		templFiles:          []string{},
 	}
-	
+
 	g.nodes[pkgPath] = node
-	
+
 	if hasElementComponent {
 		g.roots[pkgPath] = true
 	}
-	
+
 	return node
 }
 
@@ -86,12 +85,12 @@ func (g *dependencyGraph) addDependency(fromPkg, toPkg string) {
 	if fromNode == nil {
 		fromNode = g.addPackage(fromPkg, "", false)
 	}
-	
+
 	toNode := g.nodes[toPkg]
 	if toNode == nil {
 		toNode = g.addPackage(toPkg, "", false)
 	}
-	
+
 	// Add dependency relationship
 	fromNode.dependencies = appendUnique(fromNode.dependencies, toPkg)
 	toNode.dependents = appendUnique(toNode.dependents, fromPkg)
@@ -112,7 +111,7 @@ func (g *dependencyGraph) addTemplFile(pkgPath, templFile string) {
 func (g *dependencyGraph) buildInternalPackages() {
 	// Clear existing internal packages
 	g.internalPackages = make(map[string]bool)
-	
+
 	// Only packages with templ files should be considered internal
 	// External packages (stdlib, third-party) won't have templ files
 	for pkgPath, node := range g.nodes {
@@ -150,7 +149,7 @@ func (g *dependencyGraph) topologicalSort(packages []string) ([]string, error) {
 	// Build in-degree map for the specified packages
 	inDegree := make(map[string]int)
 	relevantNodes := make(map[string]*packageNode)
-	
+
 	for _, pkg := range packages {
 		node := g.nodes[pkg]
 		if node == nil {
@@ -159,7 +158,7 @@ func (g *dependencyGraph) topologicalSort(packages []string) ([]string, error) {
 		relevantNodes[pkg] = node
 		inDegree[pkg] = 0
 	}
-	
+
 	// Calculate in-degrees (only count dependencies within the package set)
 	for _, pkg := range packages {
 		node := g.nodes[pkg]
@@ -172,7 +171,7 @@ func (g *dependencyGraph) topologicalSort(packages []string) ([]string, error) {
 			}
 		}
 	}
-	
+
 	// Find all nodes with in-degree 0 (no dependencies in the set)
 	var queue []string
 	for pkg, degree := range inDegree {
@@ -180,14 +179,14 @@ func (g *dependencyGraph) topologicalSort(packages []string) ([]string, error) {
 			queue = append(queue, pkg)
 		}
 	}
-	
+
 	var sorted []string
 	for len(queue) > 0 {
 		// Pop from queue
 		pkg := queue[0]
 		queue = queue[1:]
 		sorted = append(sorted, pkg)
-		
+
 		// Reduce in-degree for dependents
 		node := g.nodes[pkg]
 		if node != nil {
@@ -202,12 +201,12 @@ func (g *dependencyGraph) topologicalSort(packages []string) ([]string, error) {
 			}
 		}
 	}
-	
+
 	// Check for cycles
 	if len(sorted) != len(relevantNodes) {
 		return nil, fmt.Errorf("dependency cycle detected among packages")
 	}
-	
+
 	return sorted, nil
 }
 
@@ -223,30 +222,4 @@ func appendUnique(slice []string, item string) []string {
 		return slice
 	}
 	return append(slice, item)
-}
-
-// filterLocalPackages filters out external packages (stdlib, third-party) from a package list
-func filterLocalPackages(packages []string, moduleRoot string) []string {
-	var local []string
-	for _, pkg := range packages {
-		// Skip standard library packages (no dots in package path)
-		if !strings.Contains(pkg, ".") {
-			continue
-		}
-		
-		// Skip common third-party packages (this is a simple heuristic)
-		// In a real implementation, we'd check against go.mod
-		if strings.HasPrefix(pkg, "github.com/") || 
-		   strings.HasPrefix(pkg, "golang.org/") ||
-		   strings.HasPrefix(pkg, "google.golang.org/") {
-			// Only include if it's our module
-			if moduleRoot != "" && strings.HasPrefix(pkg, moduleRoot) {
-				local = append(local, pkg)
-			}
-			continue
-		}
-		
-		local = append(local, pkg)
-	}
-	return local
 }

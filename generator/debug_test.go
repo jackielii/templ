@@ -8,7 +8,7 @@ import (
 func TestDebugSymbolResolution(t *testing.T) {
 	// Initialize the global symbol resolver
 	r := newSymbolResolver()
-	
+
 	// Create test overlay content
 	overlayContent := `package testelementcomponent
 
@@ -32,31 +32,31 @@ func (s StructComponent) Page(title string, attrs templ.Attributer) templ.Compon
 	// Register overlay
 	overlayPath := "/Users/jackieli/personal/templ/generator/test-element-component/template_templ.go"
 	r.overlay[overlayPath] = []byte(overlayContent)
-	
+
 	// Set up dependency graph (simulate internal package)
 	r.depGraph = newDependencyGraph()
 	r.depGraph.addPackage("github.com/a-h/templ/generator/test-element-component", "/Users/jackieli/personal/templ/generator/test-element-component", true)
 	r.depGraph.addTemplFile("github.com/a-h/templ/generator/test-element-component", "/Users/jackieli/personal/templ/generator/test-element-component/template.templ")
 	r.depGraph.buildInternalPackages()
-	
+
 	// Try to load the package using ensurePackageLoaded
 	fromDir := "/Users/jackieli/personal/templ/generator/test-element-component"
 	pkg, err := r.ensurePackageLoaded(fromDir, "")
 	if err != nil {
 		t.Fatalf("Failed to load package: %v", err)
 	}
-	
+
 	t.Logf("Package loaded: %s", pkg.PkgPath)
-	
+
 	// Check scope
 	if pkg.Types == nil {
 		t.Fatal("Package Types is nil")
 	}
-	
+
 	if pkg.Types.Scope() == nil {
 		t.Fatal("Package Types.Scope() is nil")
 	}
-	
+
 	// Look for structComp
 	obj := pkg.Types.Scope().Lookup("structComp")
 	if obj == nil {
@@ -71,7 +71,7 @@ func (s StructComponent) Page(title string, attrs templ.Attributer) templ.Compon
 func TestResolveStructMethod(t *testing.T) {
 	// Initialize the global symbol resolver
 	r := newSymbolResolver()
-	
+
 	// Create test overlay content
 	overlayContent := `package testelementcomponent
 
@@ -96,13 +96,13 @@ func (s StructComponent) Page(title string, attrs templ.Attributer) templ.Compon
 	dir := "/Users/jackieli/personal/templ/generator/test-element-component"
 	overlayPath := filepath.Join(dir, "template_templ.go")
 	r.overlay[overlayPath] = []byte(overlayContent)
-	
+
 	// Set up dependency graph
 	r.depGraph = newDependencyGraph()
 	r.depGraph.addPackage("github.com/a-h/templ/generator/test-element-component", dir, true)
 	r.depGraph.addTemplFile("github.com/a-h/templ/generator/test-element-component", filepath.Join(dir, "template.templ"))
 	r.depGraph.buildInternalPackages()
-	
+
 	// Test resolveStructMethod
 	sig, ok := r.resolveStructMethod("structComp.Page", dir)
 	if !ok {

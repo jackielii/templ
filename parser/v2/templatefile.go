@@ -60,8 +60,10 @@ func NewTemplateFileParser(pkg string) TemplateFileParser {
 	}
 }
 
-var ErrLegacyFileFormat = errors.New("legacy file format - run templ migrate")
-var ErrTemplateNotFound = errors.New("template not found")
+var (
+	ErrLegacyFileFormat = errors.New("legacy file format - run templ migrate")
+	ErrTemplateNotFound = errors.New("template not found")
+)
 
 type TemplateFileParser struct {
 	DefaultPackage string
@@ -146,6 +148,37 @@ outer:
 		if matched {
 			tf.Nodes = append(tf.Nodes, sn)
 			_, _, _ = parse.OptionalWhitespace.Parse(pi)
+			continue
+		}
+
+		// Top level go declarations: import const type var func method
+		// Try each parser in order
+		parsers := []parse.Parser[*TemplateFileGoExpression]{
+			goCommentParser,
+			goImportParser,
+			goConstDeclParser,
+			goTypeDeclParser,
+			goVarDeclParser,
+			goFuncDeclParser,
+			goMethodDeclParser,
+		}
+
+		var foundDecl bool
+		for _, parser := range parsers {
+			var gd *TemplateFileGoExpression
+			gd, matched, err = parser.Parse(pi)
+			if err != nil {
+				return tf, false, err
+			}
+			if matched {
+				tf.Nodes = append(tf.Nodes, gd)
+				_, _, _ = parse.OptionalWhitespace.Parse(pi)
+				foundDecl = true
+				break
+			}
+		}
+
+		if foundDecl {
 			continue
 		}
 

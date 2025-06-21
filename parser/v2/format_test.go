@@ -32,7 +32,7 @@ func TestFormatting(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if diff := cmp.Diff(string(a.Files[1].Data), actual.String()); diff != "" {
-				t.Fatalf("%s:\n%s", file, diff)
+				t.Fatalf("%s:\nexpected:\n%s\nactual:\n%s\ndiff:\n%s", file, string(a.Files[1].Data), actual.String(), diff)
 			}
 		})
 	}

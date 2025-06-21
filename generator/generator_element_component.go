@@ -119,10 +119,10 @@ func (g *generator) reorderElementComponentAttributes(sig componentSignature, n 
 	rest := make([]parser.Attribute, 0)
 	attrMap := make(map[string]parser.Attribute)
 	keyMap := make(map[string]parser.ConstantAttributeKey)
-	
+
 	// Debug
 	fmt.Printf("Debug: reorderElementComponentAttributes for %s with %d attributes\n", n.Name, len(n.Attributes))
-	
+
 	for _, attr := range n.Attributes {
 		keyed, ok := attr.(parser.KeyedAttribute)
 		if ok {

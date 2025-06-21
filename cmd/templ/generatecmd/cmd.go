@@ -140,14 +140,14 @@ func (cmd Generate) Run(ctx context.Context) (err error) {
 		}
 		close(preprocessEvents)
 	}()
-	
+
 	// Collect all templ files
 	for event := range preprocessEvents {
 		if strings.HasSuffix(event.Name, ".templ") {
 			templFiles = append(templFiles, event.Name)
 		}
 	}
-	
+
 	// Run preprocessing if we have templ files
 	if len(templFiles) > 0 {
 		preprocessResult, err := generator.PreprocessTemplFiles(cmd.Args.Path, templFiles)
@@ -157,7 +157,7 @@ func (cmd Generate) Run(ctx context.Context) (err error) {
 		}
 		if preprocessResult.ElementComponentsDetected {
 			internalPackages := preprocessResult.GetInternalPackages()
-			cmd.Log.Info("Preprocessing complete", 
+			cmd.Log.Info("Preprocessing complete",
 				slog.Bool("elementComponentsDetected", true),
 				slog.Int("templFileCount", len(preprocessResult.TemplFiles)),
 				slog.Int("internalPackageCount", len(internalPackages)))

@@ -827,7 +827,7 @@ func TestImportErrors(t *testing.T) {
 			input: ``,
 		},
 	}
-	
+
 	for _, test := range errorTests {
 		t.Run(test.name, func(t *testing.T) {
 			_, _, _, err := Import(test.input)

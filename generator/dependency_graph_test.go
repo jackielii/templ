@@ -8,14 +8,20 @@ import (
 
 func TestDependencyGraph_AddPackage(t *testing.T) {
 	tests := []struct {
-		name                string
-		packages            []struct{ path, dir string; hasEC bool }
-		expectedRoots       []string
-		expectedNodeCount   int
+		name     string
+		packages []struct {
+			path, dir string
+			hasEC     bool
+		}
+		expectedRoots     []string
+		expectedNodeCount int
 	}{
 		{
 			name: "single package without ElementComponent",
-			packages: []struct{ path, dir string; hasEC bool }{
+			packages: []struct {
+				path, dir string
+				hasEC     bool
+			}{
 				{"example.com/pkg1", "/path/to/pkg1", false},
 			},
 			expectedRoots:     []string{},
@@ -23,7 +29,10 @@ func TestDependencyGraph_AddPackage(t *testing.T) {
 		},
 		{
 			name: "single package with ElementComponent",
-			packages: []struct{ path, dir string; hasEC bool }{
+			packages: []struct {
+				path, dir string
+				hasEC     bool
+			}{
 				{"example.com/pkg1", "/path/to/pkg1", true},
 			},
 			expectedRoots:     []string{"example.com/pkg1"},
@@ -31,7 +40,10 @@ func TestDependencyGraph_AddPackage(t *testing.T) {
 		},
 		{
 			name: "multiple packages mixed",
-			packages: []struct{ path, dir string; hasEC bool }{
+			packages: []struct {
+				path, dir string
+				hasEC     bool
+			}{
 				{"example.com/pkg1", "/path/to/pkg1", true},
 				{"example.com/pkg2", "/path/to/pkg2", false},
 				{"example.com/pkg3", "/path/to/pkg3", true},
@@ -41,7 +53,10 @@ func TestDependencyGraph_AddPackage(t *testing.T) {
 		},
 		{
 			name: "updating existing package to have ElementComponent",
-			packages: []struct{ path, dir string; hasEC bool }{
+			packages: []struct {
+				path, dir string
+				hasEC     bool
+			}{
 				{"example.com/pkg1", "/path/to/pkg1", false},
 				{"example.com/pkg1", "/path/to/pkg1", true}, // Update
 			},
@@ -67,11 +82,11 @@ func TestDependencyGraph_AddPackage(t *testing.T) {
 			roots := g.getRoots()
 			sort.Strings(roots)
 			sort.Strings(tt.expectedRoots)
-			
+
 			if len(roots) != len(tt.expectedRoots) {
 				t.Errorf("expected %d roots, got %d", len(tt.expectedRoots), len(roots))
 			}
-			
+
 			for i, root := range roots {
 				if i >= len(tt.expectedRoots) || root != tt.expectedRoots[i] {
 					t.Errorf("root mismatch at index %d: expected %q, got %q", i, tt.expectedRoots[i], root)
@@ -157,17 +172,17 @@ func TestDependencyGraph_BuildInternalPackages(t *testing.T) {
 				// Package with templ files
 				g.addPackage("example.com/internal1", "/path/internal1", true)
 				g.addTemplFile("example.com/internal1", "/path/internal1/file.templ")
-				
+
 				// Package without templ files (external dependency)
 				g.addPackage("github.com/external/lib", "", false)
-				
+
 				// Standard library package
 				g.addPackage("fmt", "", false)
-				
+
 				// Another internal package with templ files
 				g.addPackage("example.com/internal2", "/path/internal2", false)
 				g.addTemplFile("example.com/internal2", "/path/internal2/file.templ")
-				
+
 				// Set up dependencies
 				g.addDependency("example.com/internal1", "github.com/external/lib")
 				g.addDependency("example.com/internal1", "fmt")
@@ -181,15 +196,15 @@ func TestDependencyGraph_BuildInternalPackages(t *testing.T) {
 				// Root with ElementComponent
 				g.addPackage("example.com/ui", "/path/ui", true)
 				g.addTemplFile("example.com/ui", "/path/ui/button.templ")
-				
+
 				// Internal dependency with templ files
 				g.addPackage("example.com/components", "/path/components", false)
 				g.addTemplFile("example.com/components", "/path/components/base.templ")
-				
+
 				// External dependencies without templ files
 				g.addPackage("github.com/gorilla/mux", "", false)
 				g.addPackage("database/sql", "", false)
-				
+
 				g.addDependency("example.com/ui", "example.com/components")
 				g.addDependency("example.com/ui", "github.com/gorilla/mux")
 				g.addDependency("example.com/ui", "database/sql")
@@ -211,23 +226,23 @@ func TestDependencyGraph_BuildInternalPackages(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := newDependencyGraph()
 			tt.setup(g)
-			
+
 			g.buildInternalPackages()
-			
+
 			internal := g.getInternalPackages()
 			sort.Strings(internal)
 			sort.Strings(tt.expectedInternal)
-			
+
 			if len(internal) != len(tt.expectedInternal) {
 				t.Errorf("expected %d internal packages, got %d", len(tt.expectedInternal), len(internal))
 				t.Errorf("expected: %v", tt.expectedInternal)
 				t.Errorf("got: %v", internal)
 				return
 			}
-			
+
 			for i, pkg := range internal {
 				if pkg != tt.expectedInternal[i] {
-					t.Errorf("internal package mismatch at index %d: expected %q, got %q", 
+					t.Errorf("internal package mismatch at index %d: expected %q, got %q",
 						i, tt.expectedInternal[i], pkg)
 				}
 			}
@@ -359,21 +374,21 @@ func TestDependencyGraph_TopologicalSort(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := newDependencyGraph()
 			packages := tt.setup(g)
-			
+
 			sorted, err := g.topologicalSort(packages)
-			
+
 			if tt.expectError {
 				if err == nil {
 					t.Error("expected error but got none")
 				}
 				return
 			}
-			
+
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 				return
 			}
-			
+
 			if tt.validate != nil {
 				if err := tt.validate(sorted); err != nil {
 					t.Errorf("validation failed: %v", err)
@@ -386,102 +401,26 @@ func TestDependencyGraph_TopologicalSort(t *testing.T) {
 
 func TestDependencyGraph_IsInternal(t *testing.T) {
 	g := newDependencyGraph()
-	
+
 	// Set up packages
 	g.addPackage("internal/pkg1", "/path/internal1", true)
 	g.addTemplFile("internal/pkg1", "/path/internal1/file.templ")
-	
+
 	g.addPackage("external/pkg2", "/path/external", false)
 	// No templ files for external package
-	
+
 	g.buildInternalPackages()
-	
+
 	if !g.isInternal("internal/pkg1") {
 		t.Error("internal/pkg1 should be internal")
 	}
-	
+
 	if g.isInternal("external/pkg2") {
 		t.Error("external/pkg2 should not be internal")
 	}
-	
+
 	if g.isInternal("non/existent") {
 		t.Error("non-existent package should not be internal")
-	}
-}
-
-func TestFilterLocalPackages(t *testing.T) {
-	tests := []struct {
-		name       string
-		packages   []string
-		moduleRoot string
-		expected   []string
-	}{
-		{
-			name: "filter standard library",
-			packages: []string{
-				"fmt",
-				"strings",
-				"example.com/myapp",
-			},
-			moduleRoot: "example.com/myapp",
-			expected:   []string{"example.com/myapp"},
-		},
-		{
-			name: "filter third-party packages",
-			packages: []string{
-				"github.com/gorilla/mux",
-				"golang.org/x/tools",
-				"google.golang.org/grpc",
-				"example.com/myapp",
-			},
-			moduleRoot: "example.com/myapp",
-			expected:   []string{"example.com/myapp"},
-		},
-		{
-			name: "keep module's packages from github",
-			packages: []string{
-				"github.com/myorg/myapp/pkg1",
-				"github.com/myorg/myapp/pkg2",
-				"github.com/other/lib",
-			},
-			moduleRoot: "github.com/myorg/myapp",
-			expected: []string{
-				"github.com/myorg/myapp/pkg1",
-				"github.com/myorg/myapp/pkg2",
-			},
-		},
-		{
-			name: "empty module root keeps only non-vendor packages",
-			packages: []string{
-				"myapp/internal",
-				"github.com/external/lib",
-			},
-			moduleRoot: "",
-			expected:   []string{"myapp/internal"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := filterLocalPackages(tt.packages, tt.moduleRoot)
-			
-			sort.Strings(result)
-			sort.Strings(tt.expected)
-			
-			if len(result) != len(tt.expected) {
-				t.Errorf("expected %d packages, got %d", len(tt.expected), len(result))
-				t.Errorf("expected: %v", tt.expected)
-				t.Errorf("got: %v", result)
-				return
-			}
-			
-			for i, pkg := range result {
-				if pkg != tt.expected[i] {
-					t.Errorf("package mismatch at index %d: expected %q, got %q", 
-						i, tt.expected[i], pkg)
-				}
-			}
-		})
 	}
 }
 
