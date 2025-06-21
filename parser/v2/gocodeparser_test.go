@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"go/ast"
+	"go/token"
 	"strings"
 	"testing"
 
@@ -389,15 +391,368 @@ multi-line comment */`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Positio
 }
 
 func TestGoConstDeclParser(t *testing.T) {
-	t.Skip("Const parser not implemented yet - using default Go parser")
+	tests := []struct {
+		name     string
+		input    string
+		expected *TemplateFileGoExpression
+	}{
+		{
+			name:  "single const",
+			input: `const DefaultTimeout = 30`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`const DefaultTimeout = 30`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 25, Line: 1, Col: 26}),
+			},
+		},
+		{
+			name:  "const with semicolon",
+			input: `const DefaultTimeout = 30;`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`const DefaultTimeout = 30;`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 26, Line: 1, Col: 27}),
+			},
+		},
+		{
+			name:  "const with type",
+			input: `const DefaultTimeout time.Duration = 30 * time.Second`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`const DefaultTimeout time.Duration = 30 * time.Second`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 54, Line: 1, Col: 55}),
+			},
+		},
+		{
+			name: "const block",
+			input: `const (
+	DefaultTimeout = 30
+	MaxRetries = 3
+)`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`const (
+	DefaultTimeout = 30
+	MaxRetries = 3
+)`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 49, Line: 4, Col: 2}),
+			},
+		},
+		{
+			name:     "not a const",
+			input:    `var x = 5`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pi := parse.NewInput(tt.input)
+			got, ok, err := goConstDeclParser.Parse(pi)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.expected == nil {
+				if ok {
+					t.Errorf("expected ok=false, got true with result: %+v", got)
+				}
+				return
+			}
+
+			if !ok {
+				t.Errorf("expected ok=true, got false")
+				return
+			}
+
+			// Compare the expression value
+			if got.Expression.Value != tt.expected.Expression.Value {
+				t.Errorf("expression value mismatch:\ngot:  %q\nwant: %q", got.Expression.Value, tt.expected.Expression.Value)
+			}
+		})
+	}
 }
 
 func TestGoTypeDeclParser(t *testing.T) {
-	t.Skip("Type parser not implemented yet - using default Go parser")
+	tests := []struct {
+		name     string
+		input    string
+		expected *TemplateFileGoExpression
+	}{
+		{
+			name:  "type alias",
+			input: `type ID string`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`type ID string`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 14, Line: 1, Col: 15}),
+			},
+		},
+		{
+			name:  "type with space and semicolon",
+			input: `type ID string ;`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`type ID string ;`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 16, Line: 1, Col: 17}),
+			},
+		},
+		{
+			name:  "single line struct",
+			input: `type Point struct { X, Y int }`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`type Point struct { X, Y int }`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 30, Line: 1, Col: 31}),
+			},
+		},
+		{
+			name: "multi-line struct",
+			input: `type Config struct {
+	Name string
+	Timeout int
+}`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`type Config struct {
+	Name string
+	Timeout int
+}`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 47, Line: 4, Col: 2}),
+			},
+		},
+		{
+			name: "interface",
+			input: `type Writer interface {
+	Write([]byte) (int, error)
+}`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`type Writer interface {
+	Write([]byte) (int, error)
+}`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 52, Line: 3, Col: 2}),
+			},
+		},
+		{
+			name:     "not a type",
+			input:    `const x = 5`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pi := parse.NewInput(tt.input)
+			got, ok, err := goTypeDeclParser.Parse(pi)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.expected == nil {
+				if ok {
+					t.Errorf("expected ok=false, got true with result: %+v", got)
+				}
+				return
+			}
+
+			if !ok {
+				t.Errorf("expected ok=true, got false")
+				return
+			}
+
+			// Compare the expression value
+			if got.Expression.Value != tt.expected.Expression.Value {
+				t.Errorf("expression value mismatch:\ngot:  %q\nwant: %q", got.Expression.Value, tt.expected.Expression.Value)
+			}
+		})
+	}
 }
 
 func TestGoVarDeclParser(t *testing.T) {
-	t.Skip("Var parser not implemented yet - using default Go parser")
+	tests := []struct {
+		name     string
+		input    string
+		expected *TemplateFileGoExpression
+	}{
+		{
+			name:  "single var",
+			input: `var logger = GetLogger()`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`var logger = GetLogger()`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 24, Line: 1, Col: 25}),
+			},
+		},
+		{
+			name:  "var with semicolon",
+			input: `var a = false;`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`var a = false;`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 14, Line: 1, Col: 15}),
+			},
+		},
+		{
+			name:  "var with space before semicolon",
+			input: `var a = false ;`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`var a = false ;`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 15, Line: 1, Col: 16}),
+			},
+		},
+		{
+			name:  "var with type",
+			input: `var count int = 42`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`var count int = 42`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 18, Line: 1, Col: 19}),
+			},
+		},
+		{
+			name: "var block",
+			input: `var (
+	x int
+	y = "hello"
+)`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`var (
+	x int
+	y = "hello"
+)`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 29, Line: 4, Col: 2}),
+			},
+		},
+		{
+			name:     "not a var",
+			input:    `const x = 5`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pi := parse.NewInput(tt.input)
+			got, ok, err := goVarDeclParser.Parse(pi)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.expected == nil {
+				if ok {
+					t.Errorf("expected ok=false, got true with result: %+v", got)
+				}
+				return
+			}
+
+			if !ok {
+				t.Errorf("expected ok=true, got false")
+				return
+			}
+
+			// Compare the expression value
+			if got.Expression.Value != tt.expected.Expression.Value {
+				t.Errorf("expression value mismatch:\ngot:  %q\nwant: %q", got.Expression.Value, tt.expected.Expression.Value)
+			}
+		})
+	}
+}
+
+func TestAllGoDeclParsersIntegration(t *testing.T) {
+	input := `package main
+
+// Package documentation
+import "fmt"
+import "time"
+
+import (
+	"context"
+	"errors"
+)
+
+// Constants
+const DefaultTimeout = 30
+const (
+	MaxRetries = 3
+	MinRetries = 1
+)
+
+// Types
+type ID string
+
+type Config struct {
+	Name    string
+	Timeout int
+}
+
+type Logger interface {
+	Log(message string)
+}
+
+// Variables
+var logger = GetLogger()
+var (
+	config *Config
+	debug  = false
+)
+
+// Functions
+func main() {
+	fmt.Println("Hello")
+}
+
+func GetLogger() Logger {
+	return &defaultLogger{}
+}
+
+// Methods
+func (c *Config) Validate() error {
+	if c.Name == "" {
+		return errors.New("name required")
+	}
+	return nil
+}
+
+func (l *defaultLogger) Log(message string) {
+	fmt.Println(message)
+}
+
+templ Hello() {
+	<div>Hello World</div>
+}`
+
+	tf, err := ParseString(input)
+	if err != nil {
+		t.Fatalf("failed to parse template: %v", err)
+	}
+
+	// Count different types of nodes
+	var comments, imports, consts, types, vars, funcs, methods, templates int
+	for _, node := range tf.Nodes {
+		switch n := node.(type) {
+		case *TemplateFileGoExpression:
+			val := strings.TrimSpace(n.Expression.Value)
+			switch {
+			case strings.HasPrefix(val, "//") || strings.HasPrefix(val, "/*"):
+				comments++
+			case strings.HasPrefix(val, "import"):
+				imports++
+			case strings.HasPrefix(val, "const"):
+				consts++
+			case strings.HasPrefix(val, "type"):
+				types++
+			case strings.HasPrefix(val, "var"):
+				vars++
+			case strings.HasPrefix(val, "func ("):
+				methods++
+			case strings.HasPrefix(val, "func"):
+				funcs++
+			}
+		case *HTMLTemplate:
+			templates++
+		}
+	}
+
+	// Verify counts
+	if comments != 6 { // Package doc, Constants, Types, Variables, Functions, Methods
+		t.Errorf("expected 6 comments, got %d", comments)
+	}
+	if imports != 3 { // 2 single imports + 1 import block
+		t.Errorf("expected 3 imports, got %d", imports)
+	}
+	if consts != 2 { // 1 single const + 1 const block
+		t.Errorf("expected 2 consts, got %d", consts)
+	}
+	if types != 3 { // ID, Config, Logger
+		t.Errorf("expected 3 types, got %d", types)
+	}
+	if vars != 2 { // 1 single var + 1 var block
+		t.Errorf("expected 2 vars, got %d", vars)
+	}
+	if funcs != 2 { // main, GetLogger
+		t.Errorf("expected 2 funcs, got %d", funcs)
+	}
+	if methods != 2 { // Validate, Log
+		t.Errorf("expected 2 methods, got %d", methods)
+	}
+	if templates != 1 { // Hello
+		t.Errorf("expected 1 template, got %d", templates)
+	}
 }
 
 func TestGoDeclParsersIntegration(t *testing.T) {
@@ -652,6 +1007,281 @@ templ Hello() {
 
 		if templates != 1 {
 			t.Errorf("expected 1 template, got %d", templates)
+		}
+	})
+}
+
+func TestGoFuncDeclParser(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected *TemplateFileGoExpression
+	}{
+		{
+			name:  "simple function",
+			input: `func main() {}`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`func main() {}`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 14, Line: 1, Col: 15}),
+			},
+		},
+		{
+			name: "function with body",
+			input: `func Hello() string {
+	return "Hello"
+}`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`func Hello() string {
+	return "Hello"
+}`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 38, Line: 3, Col: 2}),
+			},
+		},
+		{
+			name: "function with parameters",
+			input: `func Add(a, b int) int {
+	return a + b
+}`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`func Add(a, b int) int {
+	return a + b
+}`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 40, Line: 3, Col: 2}),
+			},
+		},
+		{
+			name:     "not a func",
+			input:    `var x = 5`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pi := parse.NewInput(tt.input)
+			got, ok, err := goFuncDeclParser.Parse(pi)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.expected == nil {
+				if ok {
+					t.Errorf("expected ok=false, got true with result: %+v", got)
+				}
+				return
+			}
+
+			if !ok {
+				t.Errorf("expected ok=true, got false")
+				return
+			}
+
+			// Compare the expression value
+			if got.Expression.Value != tt.expected.Expression.Value {
+				t.Errorf("expression value mismatch:\ngot:  %q\nwant: %q", got.Expression.Value, tt.expected.Expression.Value)
+			}
+		})
+	}
+}
+
+func TestGoFuncDeclParserWithMethods(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected *TemplateFileGoExpression
+	}{
+		{
+			name:  "simple method",
+			input: `func (p *Person) Name() string { return p.name }`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`func (p *Person) Name() string { return p.name }`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 49, Line: 1, Col: 50}),
+			},
+		},
+		{
+			name: "method with body",
+			input: `func (c *Config) Validate() error {
+	if c.Name == "" {
+		return errors.New("name required")
+	}
+	return nil
+}`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`func (c *Config) Validate() error {
+	if c.Name == "" {
+		return errors.New("name required")
+	}
+	return nil
+}`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 98, Line: 6, Col: 2}),
+			},
+		},
+		{
+			name:  "function is also parsed by unified parser",
+			input: `func main() {}`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`func main() {}`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 14, Line: 1, Col: 15}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pi := parse.NewInput(tt.input)
+			got, ok, err := goFuncDeclParser.Parse(pi)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.expected == nil {
+				if ok {
+					t.Errorf("expected ok=false, got true with result: %+v", got)
+				}
+				return
+			}
+
+			if !ok {
+				t.Errorf("expected ok=true, got false")
+				return
+			}
+
+			// Compare the expression value
+			if got.Expression.Value != tt.expected.Expression.Value {
+				t.Errorf("expression value mismatch:\ngot:  %q\nwant: %q", got.Expression.Value, tt.expected.Expression.Value)
+			}
+		})
+	}
+}
+
+func TestGoDeclParsersWithAST(t *testing.T) {
+	t.Run("const AST", func(t *testing.T) {
+		input := `const DefaultTimeout = 30`
+		pi := parse.NewInput(input)
+		got, ok, err := goConstDeclParser.Parse(pi)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatalf("expected ok=true, got false")
+		}
+		
+		// Check that AST is populated
+		if got.Expression.Stmt == nil {
+			t.Fatalf("expected Stmt to be populated, got nil")
+		}
+		
+		// Verify it's a GenDecl with CONST token
+		genDecl, ok := got.Expression.Stmt.(*ast.GenDecl)
+		if !ok {
+			t.Fatalf("expected *ast.GenDecl, got %T", got.Expression.Stmt)
+		}
+		if genDecl.Tok != token.CONST {
+			t.Errorf("expected CONST token, got %v", genDecl.Tok)
+		}
+	})
+
+	t.Run("type AST", func(t *testing.T) {
+		input := `type Config struct { Name string }`
+		pi := parse.NewInput(input)
+		got, ok, err := goTypeDeclParser.Parse(pi)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatalf("expected ok=true, got false")
+		}
+		
+		// Check that AST is populated
+		if got.Expression.Stmt == nil {
+			t.Fatalf("expected Stmt to be populated, got nil")
+		}
+		
+		// Verify it's a GenDecl with TYPE token
+		genDecl, ok := got.Expression.Stmt.(*ast.GenDecl)
+		if !ok {
+			t.Fatalf("expected *ast.GenDecl, got %T", got.Expression.Stmt)
+		}
+		if genDecl.Tok != token.TYPE {
+			t.Errorf("expected TYPE token, got %v", genDecl.Tok)
+		}
+	})
+
+	t.Run("var AST", func(t *testing.T) {
+		input := `var logger = GetLogger()`
+		pi := parse.NewInput(input)
+		got, ok, err := goVarDeclParser.Parse(pi)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatalf("expected ok=true, got false")
+		}
+		
+		// Check that AST is populated
+		if got.Expression.Stmt == nil {
+			t.Fatalf("expected Stmt to be populated, got nil")
+		}
+		
+		// Verify it's a GenDecl with VAR token
+		genDecl, ok := got.Expression.Stmt.(*ast.GenDecl)
+		if !ok {
+			t.Fatalf("expected *ast.GenDecl, got %T", got.Expression.Stmt)
+		}
+		if genDecl.Tok != token.VAR {
+			t.Errorf("expected VAR token, got %v", genDecl.Tok)
+		}
+	})
+
+	t.Run("func AST", func(t *testing.T) {
+		input := `func main() { fmt.Println("Hello") }`
+		pi := parse.NewInput(input)
+		got, ok, err := goFuncDeclParser.Parse(pi)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatalf("expected ok=true, got false")
+		}
+		
+		// Check that AST is populated
+		if got.Expression.Stmt == nil {
+			t.Fatalf("expected Stmt to be populated, got nil")
+		}
+		
+		// Verify it's a FuncDecl
+		funcDecl, ok := got.Expression.Stmt.(*ast.FuncDecl)
+		if !ok {
+			t.Fatalf("expected *ast.FuncDecl, got %T", got.Expression.Stmt)
+		}
+		if funcDecl.Name.Name != "main" {
+			t.Errorf("expected function name 'main', got %q", funcDecl.Name.Name)
+		}
+		if funcDecl.Recv != nil {
+			t.Errorf("expected no receiver for function, got %v", funcDecl.Recv)
+		}
+	})
+
+	t.Run("method AST", func(t *testing.T) {
+		input := `func (c *Config) Validate() error { return nil }`
+		pi := parse.NewInput(input)
+		got, ok, err := goFuncDeclParser.Parse(pi)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatalf("expected ok=true, got false")
+		}
+		
+		// Check that AST is populated
+		if got.Expression.Stmt == nil {
+			t.Fatalf("expected Stmt to be populated, got nil")
+		}
+		
+		// Verify it's a FuncDecl with receiver
+		funcDecl, ok := got.Expression.Stmt.(*ast.FuncDecl)
+		if !ok {
+			t.Fatalf("expected *ast.FuncDecl, got %T", got.Expression.Stmt)
+		}
+		if funcDecl.Name.Name != "Validate" {
+			t.Errorf("expected method name 'Validate', got %q", funcDecl.Name.Name)
+		}
+		if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
+			t.Errorf("expected receiver for method, got none")
 		}
 	})
 }

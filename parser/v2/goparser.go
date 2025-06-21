@@ -13,7 +13,7 @@ func parseGoFuncDecl(prefix string, pi *parse.Input) (name string, expression Ex
 	from := pi.Index()
 	src, _ := pi.Peek(-1)
 	src = strings.TrimPrefix(src, prefix)
-	name, expr, funcDecl, err := goexpression.Func("func " + src)
+	name, expr, funcDecl, err := goexpression.FuncSig("func " + src)
 	if err != nil {
 		return name, expression, parse.Error(fmt.Sprintf("invalid %s declaration: %v", prefix, err.Error()), pi.Position())
 	}

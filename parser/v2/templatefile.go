@@ -151,7 +151,7 @@ outer:
 			continue
 		}
 
-		// Top level go declarations: import const type var func method
+		// Top level go declarations: import const type var func
 		// Try each parser in order
 		parsers := []parse.Parser[*TemplateFileGoExpression]{
 			goCommentParser,
@@ -160,7 +160,6 @@ outer:
 			goTypeDeclParser,
 			goVarDeclParser,
 			goFuncDeclParser,
-			goMethodDeclParser,
 		}
 
 		var foundDecl bool

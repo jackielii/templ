@@ -234,8 +234,12 @@ func SliceArgs(content string) (expr string, err error) {
 	return src[from:to], err
 }
 
-// Func returns the Go code up to the opening brace of the function body along with the AST node.
-func Func(content string) (name, expr string, funcDecl *ast.FuncDecl, err error) {
+// FuncSig returns the Go code up to the opening brace of the function body along with the AST node.
+// It handles both regular functions and methods (functions with receivers).
+func FuncSig(content string) (name, expr string, decl *ast.FuncDecl, err error) {
+	if !strings.HasPrefix(content, "func") {
+		return "", "", nil, ErrExpectedNodeNotFound
+	}
 	prefix := "package main\n"
 	src := prefix + content
 
@@ -258,11 +262,41 @@ func Func(content string) (name, expr string, funcDecl *ast.FuncDecl, err error)
 		}
 		expr = strings.Clone(src[start:end])
 		name = fn.Name.Name
-		funcDecl = fn
+		decl = fn
 		return false
 	})
 
-	return name, expr, funcDecl, err
+	return name, expr, decl, err
+}
+
+func Func(content string) (start, end int, stmt any, err error) {
+	if !strings.HasPrefix(content, "func") {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+	prefix := "package main\n"
+	src := prefix + content
+
+	node, err := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	if node == nil {
+		return 0, 0, nil, err
+	}
+
+	var found bool
+	inspectFirstNode(node, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+		end = int(fn.End()) - 1 - len(prefix)
+		stmt = fn
+		found = true
+		return false
+	})
+	if !found {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+
+	return start, end, stmt, nil
 }
 
 func Import(content string) (start, end int, stmt *ast.ImportSpec, err error) {
@@ -298,6 +332,99 @@ func Import(content string) (start, end int, stmt *ast.ImportSpec, err error) {
 			}
 		}
 		stmt = spec
+		found = true
+		return false
+	})
+	if !found {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+
+	return start, end, stmt, nil
+}
+
+// Const parses a const declaration and returns the AST node.
+func Const(content string) (start, end int, stmt any, err error) {
+	if !strings.HasPrefix(content, "const") {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+	prefix := "package main\n"
+	src := prefix + content
+
+	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	if node == nil {
+		return 0, 0, nil, parseErr
+	}
+
+	var found bool
+	inspectFirstNode(node, func(n ast.Node) bool {
+		decl, ok := n.(*ast.GenDecl)
+		if !ok || decl.Tok != token.CONST {
+			return true
+		}
+		end = int(decl.End()) - len(prefix) - 1
+		stmt = decl
+		found = true
+		return false
+	})
+	if !found {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+
+	return start, end, stmt, nil
+}
+
+// Type parses a type declaration and returns the AST node.
+func Type(content string) (start, end int, stmt any, err error) {
+	if !strings.HasPrefix(content, "type") {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+	prefix := "package main\n"
+	src := prefix + content
+
+	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	if node == nil {
+		return 0, 0, nil, parseErr
+	}
+
+	var found bool
+	inspectFirstNode(node, func(n ast.Node) bool {
+		decl, ok := n.(*ast.GenDecl)
+		if !ok || decl.Tok != token.TYPE {
+			return true
+		}
+		end = int(decl.End()) - len(prefix) - 1
+		stmt = decl
+		found = true
+		return false
+	})
+	if !found {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+
+	return start, end, stmt, nil
+}
+
+// Var parses a var declaration and returns the AST node.
+func Var(content string) (start, end int, stmt any, err error) {
+	if !strings.HasPrefix(content, "var") {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+	prefix := "package main\n"
+	src := prefix + content
+
+	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	if node == nil {
+		return 0, 0, nil, parseErr
+	}
+
+	var found bool
+	inspectFirstNode(node, func(n ast.Node) bool {
+		decl, ok := n.(*ast.GenDecl)
+		if !ok || decl.Tok != token.VAR {
+			return true
+		}
+		end = int(decl.End()) - len(prefix) - 1
+		stmt = decl
 		found = true
 		return false
 	})
