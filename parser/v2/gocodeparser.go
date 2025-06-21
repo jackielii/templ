@@ -80,10 +80,10 @@ var goImportParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpressi
 	// Reset position
 	pi.Seek(start.Index)
 
-	var importContent strings.Builder
-
+	var content string
 	// Check if it's a multi-line import block
 	if strings.Contains(firstLine, "(") {
+		var importContent strings.Builder
 		// Multi-line import block - read until closing parenthesis
 		parenDepth := 0
 		for {
@@ -105,22 +105,13 @@ var goImportParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpressi
 				}
 			}
 		}
+		content = importContent.String()
 	} else {
 		// Single-line import - just read the line
-		var line string
-		line, _, _ = stringUntilNewLineOrEOF.Parse(pi)
-		importContent.WriteString(line)
-	}
-
-	// Read any trailing newline
-	var newLine string
-	newLine, _, _ = parse.NewLine.Parse(pi)
-	if newLine != "" {
-		importContent.WriteString(newLine)
+		content, _, _ = stringUntilNewLineOrEOF.Parse(pi)
 	}
 
 	// Parse the import to get the AST (validation)
-	content := importContent.String()
 	_, _, stmt, parseErr := goexpression.Import(content)
 	if parseErr != nil {
 		// If parsing fails, reset and let default parser handle it
@@ -164,7 +155,7 @@ var goCommentParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpress
 		// Don't include the newline in the expression to make endsWithComment work correctly
 		end := pi.Position()
 		expr := NewExpression(line, start, end)
-		
+
 		// But still consume the newline from input
 		parse.NewLine.Parse(pi)
 
@@ -199,7 +190,7 @@ var goCommentParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpress
 		// Don't include trailing newline in the expression
 		end := pi.Position()
 		expr := NewExpression(comment.String(), start, end)
-		
+
 		// But still consume the newline from input
 		parse.NewLine.Parse(pi)
 

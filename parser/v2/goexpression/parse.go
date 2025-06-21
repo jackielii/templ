@@ -235,7 +235,7 @@ func SliceArgs(content string) (expr string, err error) {
 }
 
 // Func returns the Go code up to the opening brace of the function body along with the AST node.
-func Func(content string) (name, expr string, funcDecl any, err error) {
+func Func(content string) (name, expr string, funcDecl *ast.FuncDecl, err error) {
 	prefix := "package main\n"
 	src := prefix + content
 
@@ -265,7 +265,7 @@ func Func(content string) (name, expr string, funcDecl any, err error) {
 	return name, expr, funcDecl, err
 }
 
-func Import(content string) (start, end int, stmt any, err error) {
+func Import(content string) (start, end int, stmt *ast.ImportSpec, err error) {
 	if !strings.HasPrefix(content, "import") {
 		return 0, 0, nil, ErrExpectedNodeNotFound
 	}
@@ -284,10 +284,7 @@ func Import(content string) (start, end int, stmt any, err error) {
 			return true
 		}
 		// Skip "import " which is 7 characters
-		start = 7
-		if start > len(content) {
-			start = len(content)
-		}
+		start = min(7, len(content))
 		// Find the end of the import spec by scanning the content
 		end = start
 		inQuotes := false
@@ -338,7 +335,7 @@ func inspectFirstNode(node ast.Node, f func(ast.Node) bool) {
 	})
 }
 
-// Extract a Go expression from the content.
+// Extractor extracts a Go expression from the content.
 // The Go expression starts at "start" and ends at "end".
 // The reader should skip until "length" to pass over the expression and into the next
 // logical block.
