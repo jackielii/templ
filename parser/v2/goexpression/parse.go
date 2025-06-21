@@ -265,6 +265,52 @@ func Func(content string) (name, expr string, funcDecl any, err error) {
 	return name, expr, funcDecl, err
 }
 
+func Import(content string) (start, end int, stmt any, err error) {
+	if !strings.HasPrefix(content, "import") {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+	prefix := "package main\n"
+	src := prefix + content
+
+	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	if node == nil {
+		return 0, 0, nil, parseErr
+	}
+
+	var found bool
+	inspectFirstNode(node, func(n ast.Node) bool {
+		spec, ok := n.(*ast.ImportSpec)
+		if !ok {
+			return true
+		}
+		// Skip "import " which is 7 characters
+		start = 7
+		if start > len(content) {
+			start = len(content)
+		}
+		// Find the end of the import spec by scanning the content
+		end = start
+		inQuotes := false
+		for i := start; i < len(content); i++ {
+			if content[i] == '"' && (i == 0 || content[i-1] != '\\') {
+				inQuotes = !inQuotes
+				if !inQuotes {
+					end = i + 1
+					break
+				}
+			}
+		}
+		stmt = spec
+		found = true
+		return false
+	})
+	if !found {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+
+	return start, end, stmt, nil
+}
+
 func latestEnd(start int, nodes ...ast.Node) (end int) {
 	end = start
 	for _, n := range nodes {

@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,7 +79,7 @@ func (r *symbolResolver) resolveElementComponent(fromDir, currentPkg string, com
 	if !strings.Contains(componentName, ".") && currentPkg != "" {
 		cacheKey = currentPkg + "." + componentName
 	}
-	
+
 	// First check cache with qualified name
 	if sig, ok := r.signatures[cacheKey]; ok {
 		// Debug: Found in cache
@@ -363,7 +362,7 @@ func (r *symbolResolver) resolveComponent(fromDir, pkgPath, componentName string
 	if err != nil {
 		return componentSignature{}, err
 	}
-	
+
 	// Debug
 	if componentName == "Button" {
 		fmt.Printf("Debug: resolveComponent extracted Button with %d params\n", len(sig.parameters))
@@ -387,151 +386,108 @@ func (r *symbolResolver) resolveComponent(fromDir, pkgPath, componentName string
 }
 
 // generateOverlay creates Go stub code for templ templates
-func (r *symbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string) string {
+func generateOverlay(tf *parser.TemplateFile, pkgName string) string {
 	var sb strings.Builder
-	var importSection strings.Builder
 	var bodySection strings.Builder
 
 	sb.WriteString(fmt.Sprintf("package %s\n\n", pkgName))
 
-	// First pass: collect only necessary imports
-	// We need to determine which imports are actually used in the overlay
-	neededImports := make(map[string]bool)
-	neededImports["github.com/a-h/templ"] = true // Always need templ
-	
-	// Check what imports we need based on type definitions and method signatures
+	// Check if we need the templ import
+	needsTemplImport := false
+	hasTemplImport := false
+	existingImports := ""
+
+	// First pass: collect existing imports and check if we need templ import
 	for _, node := range tf.Nodes {
 		switch n := node.(type) {
 		case *parser.TemplateFileGoExpression:
 			exprValue := n.Expression.Value
-			// Check for types that might need imports
-			if strings.Contains(exprValue, "type ") {
-				// Check the entire type definition for import needs
-				if strings.Contains(exprValue, "templ.") {
-					neededImports["github.com/a-h/templ"] = true
+			
+			// Check if this is an import statement
+			if strings.Contains(exprValue, "import") {
+				existingImports = exprValue
+				imports := extractImports(exprValue)
+				for _, imp := range imports {
+					if imp == "github.com/a-h/templ" {
+						hasTemplImport = true
+					}
 				}
-				if strings.Contains(exprValue, "context.") {
-					neededImports["context"] = true
-				}
-				if strings.Contains(exprValue, "io.") {
-					neededImports["io"] = true
-				}
-			}
-			if strings.Contains(exprValue, "context.Context") {
-				neededImports["context"] = true
-			}
-			if strings.Contains(exprValue, "io.Writer") {
-				neededImports["io"] = true
-			}
-			if strings.Contains(exprValue, "fmt.") {
-				neededImports["fmt"] = true
 			}
 		case *parser.HTMLTemplate:
-			// Check template parameters for types that need imports
-			exprValue := n.Expression.Value
-			if strings.Contains(exprValue, "templ.") {
-				neededImports["github.com/a-h/templ"] = true
-			}
+			// We generate templ.Component and templ.NopComponent for HTML templates
+			needsTemplImport = true
+		case *parser.CSSTemplate:
+			// We generate templ.CSSClass and templ.ComponentCSSClass for CSS templates
+			needsTemplImport = true
+		case *parser.ScriptTemplate:
+			// We generate templ.ComponentScript for script templates
+			needsTemplImport = true
 		}
 	}
-	
-	// Now process imports, only including needed ones
-	for _, node := range tf.Nodes {
-		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
-			exprValue := goExpr.Expression.Value
 
-			// Only include imports and type definitions that are needed for templates
-			includeInOverlay := false
-
-			// Process import statements
-			if strings.Contains(exprValue, "import") {
-				// Parse the imports to see what's being imported
-				imports := extractImports(exprValue)
-				
-				// Build a new import block with only needed imports
-				var neededImportsList []string
+	// Write imports
+	if existingImports != "" {
+		// We have existing imports
+		if needsTemplImport && !hasTemplImport {
+			// Need to add templ import to existing imports
+			if strings.Contains(existingImports, "import (") {
+				// Multi-line import block
+				lines := strings.Split(existingImports, "\n")
+				for i, line := range lines {
+					sb.WriteString(line)
+					if i < len(lines)-1 {
+						sb.WriteString("\n")
+					}
+					// Add templ import after the opening parenthesis
+					if strings.TrimSpace(line) == "import (" {
+						sb.WriteString("\t\"github.com/a-h/templ\"\n")
+					}
+				}
+			} else {
+				// Single import statement - convert to multi-line
+				sb.WriteString("import (\n")
+				sb.WriteString("\t\"github.com/a-h/templ\"\n")
+				// Extract the single import
+				imports := extractImports(existingImports)
 				for _, imp := range imports {
-					if neededImports[imp] {
-						neededImportsList = append(neededImportsList, imp)
-					}
+					sb.WriteString(fmt.Sprintf("\t\"%s\"\n", imp))
 				}
-				
-				// We'll handle imports separately
-				// Nothing to do here, imports are processed later
+				sb.WriteString(")")
 			}
-
-			// Include type definitions that might be used as receivers for templ methods
-			// or types that implement templ.Component
-			if strings.Contains(exprValue, "type ") {
-				// Include all type definitions, not just structs
-				includeInOverlay = true
-			}
-			
-			// Include simple variable declarations (like var structComp StructComponent)
-			// This is important for struct method resolution
-			if strings.HasPrefix(strings.TrimSpace(exprValue), "var ") {
-				// Include all var declarations, even if they have initializers
-				includeInOverlay = true
-			}
-
-			// Skip function implementations (they often reference imports we don't need)
-			// BUT include methods that might implement interfaces
-			if strings.Contains(exprValue, "func ") && strings.Contains(exprValue, "{") &&
-				!strings.Contains(exprValue, "templ ") {
-				// Check if this is a method (has receiver)
-				if strings.Contains(exprValue, "func (") {
-					// Include methods that might implement templ.Component (e.g., Render method)
-					if strings.Contains(exprValue, "Render(") && strings.Contains(exprValue, "context.Context") {
-						includeInOverlay = true
-					} else {
-						includeInOverlay = false
-					}
-				} else {
-					// Skip regular function implementations
-					includeInOverlay = false
-				}
-			}
-
-			if includeInOverlay {
-				if strings.Contains(exprValue, "import") {
-					// This is handled above, skip
-				} else {
-					bodySection.WriteString(exprValue)
-					bodySection.WriteString("\n\n")
-				}
-			}
-		}
-	}
-
-	// Write all needed imports
-	var importList []string
-	for imp := range neededImports {
-		importList = append(importList, imp)
-	}
-	
-	// Sort imports for consistency
-	sort.Strings(importList)
-	
-	// Write import block
-	if len(importList) > 0 {
-		if len(importList) == 1 {
-			importSection.WriteString(fmt.Sprintf("import \"%s\"\n\n", importList[0]))
+			sb.WriteString("\n\n")
 		} else {
-			importSection.WriteString("import (\n")
-			for _, imp := range importList {
-				importSection.WriteString(fmt.Sprintf("\t\"%s\"\n", imp))
-			}
-			importSection.WriteString(")\n\n")
+			// Just copy existing imports as-is
+			sb.WriteString(existingImports)
+			sb.WriteString("\n\n")
 		}
+	} else if needsTemplImport {
+		// No existing imports but we need templ
+		sb.WriteString("import (\n")
+		sb.WriteString("\t\"github.com/a-h/templ\"\n")
+		sb.WriteString(")\n\n")
 	}
 
-	// Second pass: generate stubs for templates
+	// Second pass: include type definitions and generate template stubs
 	for _, node := range tf.Nodes {
 		switch n := node.(type) {
+		case *parser.TemplateFileGoExpression:
+			exprValue := n.Expression.Value
+
+			// Skip import statements (already handled)
+			if strings.Contains(exprValue, "import") {
+				continue
+			}
+
+			// Include type definitions
+			if strings.Contains(exprValue, "type ") {
+				bodySection.WriteString(exprValue)
+				bodySection.WriteString("\n\n")
+			}
+
 		case *parser.HTMLTemplate:
 			// Extract just the function signature, not the entire expression
 			exprValue := strings.TrimSpace(n.Expression.Value)
-			
+
 			// For struct methods, extract the receiver and method signature
 			if strings.HasPrefix(exprValue, "(") {
 				// Find the closing parenthesis for the receiver
@@ -553,7 +509,7 @@ func (r *symbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string
 					exprValue = strings.TrimSpace(exprValue[:lastParen+1])
 				}
 			}
-			
+
 			// Debug: Button expression value
 
 			// Generate proper function signature
@@ -584,28 +540,10 @@ func (r *symbolResolver) generateOverlay(tf *parser.TemplateFile, pkgName string
 		}
 	}
 
-	// Add blank assignments for standard imports to avoid unused errors
-	bodySection.WriteString("\n// Suppress unused import errors\n")
-	
-	// Add blank assignments only for imports we have
-	for _, imp := range importList {
-		switch imp {
-		case "context":
-			bodySection.WriteString("var _ = context.TODO\n")
-		case "io":
-			bodySection.WriteString("var _ = io.Discard\n")
-		case "github.com/a-h/templ":
-			bodySection.WriteString("var _ = templ.NopComponent\n")
-		}
-	}
-
-	// Combine all sections
-	sb.WriteString(importSection.String())
+	// Build final output
 	sb.WriteString(bodySection.String())
-	
-	overlayContent := sb.String()
-	
-	return overlayContent
+
+	return strings.TrimSpace(sb.String())
 }
 
 // importInfo contains import path and its identifier
@@ -617,21 +555,21 @@ type importInfo struct {
 // extractImportsWithAliases extracts imports with their identifiers from Go code
 func extractImportsWithAliases(goCode string) []importInfo {
 	var imports []importInfo
-	
+
 	// Use the existing parseImportPath logic but extend it
 	fset := token.NewFileSet()
 	fullGoCode := "package main\n" + goCode
-	
+
 	astFile, err := goparser.ParseFile(fset, "", fullGoCode, goparser.ImportsOnly)
 	if err != nil {
 		return imports
 	}
-	
+
 	for _, imp := range astFile.Imports {
 		if imp.Path != nil {
 			pkgPath := strings.Trim(imp.Path.Value, `"`)
 			var identifier string
-			
+
 			if imp.Name != nil && imp.Name.Name != "." {
 				// Explicit alias
 				identifier = imp.Name.Name
@@ -646,7 +584,7 @@ func extractImportsWithAliases(goCode string) []importInfo {
 					}
 				}
 			}
-			
+
 			if identifier != "" && identifier != "_" {
 				// Skip some common standard library packages that are unlikely to be unused
 				skipPackages := map[string]bool{
@@ -662,7 +600,7 @@ func extractImportsWithAliases(goCode string) []importInfo {
 			}
 		}
 	}
-	
+
 	return imports
 }
 
@@ -743,12 +681,12 @@ func (r *symbolResolver) registerTemplOverlay(tf *parser.TemplateFile, fileName 
 
 	overlayMu.Lock()
 	defer overlayMu.Unlock()
-	
+
 	// Generate overlay only for this specific file
-	overlayContent := r.generateOverlay(tf, pkgName)
+	overlayContent := generateOverlay(tf, pkgName)
 	fmt.Printf("Debug: Generated overlay for %s:\n%s\n", overlayPath, overlayContent)
 	r.overlay[overlayPath] = []byte(overlayContent)
-	
+
 	// Clear package cache when overlay changes since cached packages won't have the new overlay
 	// This is important when processing multiple files
 	r.packageCache = make(map[string]*packages.Package)
@@ -763,11 +701,11 @@ func (r *symbolResolver) registerSingleFileWithDependencies(tf *parser.TemplateF
 	if err := r.registerTemplOverlay(tf, fileName); err != nil {
 		return err
 	}
-	
+
 	// Extract imports from the template file to find dependencies
 	dir := filepath.Dir(fileName)
 	imports := make(map[string]bool)
-	
+
 	// Look for imports in Go expressions
 	for _, node := range tf.Nodes {
 		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
@@ -778,7 +716,7 @@ func (r *symbolResolver) registerSingleFileWithDependencies(tf *parser.TemplateF
 			}
 		}
 	}
-	
+
 	// For each import, check if it's a local package with templ files
 	// Debug: Found %d imports in %s
 	for imp := range imports {
@@ -787,7 +725,7 @@ func (r *symbolResolver) registerSingleFileWithDependencies(tf *parser.TemplateF
 		if !strings.Contains(imp, "/") {
 			continue
 		}
-		
+
 		// Try to find the package directory
 		// This is a simplified approach - in reality we'd need to use go/build
 		// For now, handle relative imports like "./mod" and "./externmod"
@@ -803,7 +741,7 @@ func (r *symbolResolver) registerSingleFileWithDependencies(tf *parser.TemplateF
 					depDir = filepath.Join(dir, lastPart)
 				}
 			}
-			
+
 			if depDir != "" {
 				// Debug: Looking for templ files in %s
 				// Look for templ files in the dependency directory
@@ -823,7 +761,7 @@ func (r *symbolResolver) registerSingleFileWithDependencies(tf *parser.TemplateF
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -850,7 +788,7 @@ func (r *symbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*p
 	// Determine if this is an internal or external package
 	var isInternal bool
 	var useOverlay bool
-	
+
 	if r.depGraph != nil {
 		// If we're loading by directory, get the package path first
 		pkgPath := pattern
@@ -861,7 +799,7 @@ func (r *symbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*p
 				pkgPath = tempPkg.PkgPath
 			}
 		}
-		
+
 		// Check if this package is internal (in our dependency tree)
 		isInternal = r.depGraph.isInternal(pkgPath)
 		useOverlay = isInternal // Only use overlay for internal packages
@@ -878,7 +816,7 @@ func (r *symbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*p
 		Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax | packages.NeedImports,
 		Dir:  fromDir,
 	}
-	
+
 	// Only apply overlay for internal packages
 	if useOverlay {
 		cfg.Overlay = r.overlay
@@ -898,7 +836,7 @@ func (r *symbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*p
 
 	pkg := pkgs[0]
 	fmt.Printf("Debug ensurePackageLoaded: Loaded package %s, types=%v, %d errors\n", pkg.PkgPath, pkg.Types != nil, len(pkg.Errors))
-	
+
 	// For internal packages, allow certain errors from overlays
 	if isInternal && len(pkg.Errors) > 0 {
 		hasNonTemplErrors := false
@@ -928,16 +866,16 @@ func loadPackageMinimal(dir string) (*packages.Package, error) {
 		Mode: packages.NeedName,
 		Dir:  dir,
 	}
-	
+
 	pkgs, err := packages.Load(cfg, ".")
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if len(pkgs) == 0 {
 		return nil, fmt.Errorf("no packages found")
 	}
-	
+
 	return pkgs[0], nil
 }
 

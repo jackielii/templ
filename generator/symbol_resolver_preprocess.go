@@ -59,7 +59,7 @@ func PreprocessTemplFiles(rootDir string, templFiles []string) (*PreprocessResul
 		if err != nil {
 			return nil, fmt.Errorf("failed to detect element syntax in %s: %w", file, err)
 		}
-		
+
 		if hasElementComponent {
 			packageHasElementComponent[pkgPath] = true
 			result.ElementComponentsDetected = true
@@ -72,7 +72,7 @@ func PreprocessTemplFiles(rootDir string, templFiles []string) (*PreprocessResul
 		if packageImports[pkgPath] == nil {
 			packageImports[pkgPath] = make(map[string]bool)
 		}
-		
+
 		for _, node := range tf.Nodes {
 			if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
 				if imports := extractImports(goExpr.Expression.Value); len(imports) > 0 {
@@ -122,7 +122,7 @@ func PreprocessTemplFiles(rootDir string, templFiles []string) (*PreprocessResul
 		if !exists || len(node.templFiles) == 0 {
 			continue
 		}
-		
+
 		fmt.Printf("Debug: Processing package %s with %d templ files\n", pkg, len(node.templFiles))
 		for _, file := range node.templFiles {
 			tf, err := parser.Parse(file)
@@ -142,7 +142,7 @@ func PreprocessTemplFiles(rootDir string, templFiles []string) (*PreprocessResul
 		if !exists || node.directory == "" {
 			continue
 		}
-		
+
 		// Force package loading with overlays to populate type information
 		if _, err := globalSymbolResolver.ensurePackageLoaded(node.directory, ""); err != nil {
 			// Don't fail on package load errors, just log them
@@ -156,13 +156,13 @@ func PreprocessTemplFiles(rootDir string, templFiles []string) (*PreprocessResul
 		if !exists {
 			continue
 		}
-		
+
 		for _, file := range node.templFiles {
 			tf, err := parser.Parse(file)
 			if err != nil {
 				continue
 			}
-			
+
 			// Extract local templates and cache them
 			for _, n := range tf.Nodes {
 				if tmpl, ok := n.(*parser.HTMLTemplate); ok {
@@ -194,7 +194,7 @@ func extractTemplateSignature(tmpl *parser.HTMLTemplate, pkgPath string) compone
 	// Extract template name from the expression value
 	// The expression value is like "Container(child templ.Component)"
 	exprValue := strings.TrimSpace(tmpl.Expression.Value)
-	
+
 	var name string
 	// Check if this is a struct method template
 	if strings.HasPrefix(exprValue, "(") {
@@ -219,10 +219,10 @@ func extractTemplateSignature(tmpl *parser.HTMLTemplate, pkgPath string) compone
 	if name == "" {
 		return componentSignature{}
 	}
-	
+
 	// Parse parameters from the template expression
 	var params []parameterInfo
-	
+
 	// Simple parameter extraction - this is a basic implementation
 	// Real implementation should use proper Go AST parsing
 	if openParen := strings.Index(exprValue, "("); openParen != -1 {
@@ -262,7 +262,7 @@ func extractTemplateSignature(tmpl *parser.HTMLTemplate, pkgPath string) compone
 			}
 		}
 	}
-	
+
 	return componentSignature{
 		packagePath:   pkgPath,
 		name:          name,
@@ -335,36 +335,38 @@ func detectElementComponentSyntax(fileName string) (bool, error) {
 	return detected, nil
 }
 
+func extractImports2() {}
+
 // extractImports extracts import paths from Go code
 func extractImports(goCode string) []string {
 	var imports []string
-	
+
 	// Simple heuristic - look for import statements
 	lines := strings.Split(goCode, "\n")
 	inImportBlock := false
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		
+
 		// Check for import block start
 		if strings.HasPrefix(line, "import (") {
 			inImportBlock = true
 			continue
 		}
-		
+
 		// Check for import block end
 		if inImportBlock && line == ")" {
 			inImportBlock = false
 			continue
 		}
-		
+
 		// Single line import
 		if strings.HasPrefix(line, "import ") && strings.Contains(line, "\"") {
 			if path := extractImportPath(line); path != "" {
 				imports = append(imports, path)
 			}
 		}
-		
+
 		// Import within block
 		if inImportBlock && strings.Contains(line, "\"") {
 			if path := extractImportPath(line); path != "" {
@@ -372,7 +374,7 @@ func extractImports(goCode string) []string {
 			}
 		}
 	}
-	
+
 	return imports
 }
 
@@ -389,4 +391,3 @@ func extractImportPath(line string) string {
 	}
 	return line[start+1 : start+1+end]
 }
-

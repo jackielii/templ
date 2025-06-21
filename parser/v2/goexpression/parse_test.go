@@ -752,6 +752,114 @@ func TestFunc(t *testing.T) {
 	}
 }
 
+var importTests = []testInput{
+	{
+		name:  "basic import",
+		input: `"fmt"`,
+	},
+	{
+		name:  "import with alias",
+		input: `f "fmt"`,
+	},
+	{
+		name:  "import with dot",
+		input: `. "fmt"`,
+	},
+	{
+		name:  "import with underscore",
+		input: `_ "fmt"`,
+	},
+	{
+		name:  "import with path",
+		input: `"github.com/a-h/templ"`,
+	},
+	{
+		name:  "import with alias and path",
+		input: `templ "github.com/a-h/templ"`,
+	},
+	{
+		name:  "import with escaped quotes",
+		input: `"github.com/test/\"quoted\""`,
+	},
+	{
+		name:  "import with spaces",
+		input: `  "fmt"`,
+	},
+	{
+		name:  "import with alias and spaces",
+		input: `  myalias   "fmt"`,
+	},
+}
+
+func TestImport(t *testing.T) {
+	prefix := "import "
+	suffixes := []string{
+		"",
+		"\n",
+		"\nvar x = 1",
+		"\n\nfunc main() {}",
+	}
+	importWrapper := func(content string) (start, end int, stmt any, err error) {
+		return Import(content)
+	}
+	for _, test := range importTests {
+		for i, suffix := range suffixes {
+			t.Run(fmt.Sprintf("%s_%d", test.name, i), run(test, prefix, suffix, importWrapper))
+		}
+	}
+}
+
+func TestImportErrors(t *testing.T) {
+	errorTests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "not an import",
+			input: `func main() {}`,
+		},
+		{
+			name:  "starts with if",
+			input: `if true {}`,
+		},
+		{
+			name:  "empty string",
+			input: ``,
+		},
+	}
+	
+	for _, test := range errorTests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, err := Import(test.input)
+			if err == nil {
+				t.Errorf("expected error for input %q, but got nil", test.input)
+			}
+		})
+	}
+}
+
+func FuzzImport(f *testing.F) {
+	suffixes := []string{
+		"",
+		"\n",
+		"\nvar x = 1",
+		"\n\nfunc main() {}",
+	}
+	for _, test := range importTests {
+		for _, suffix := range suffixes {
+			f.Add("import " + test.input + suffix)
+		}
+	}
+	f.Fuzz(func(t *testing.T, src string) {
+		start, end, _, err := Import(src)
+		if err != nil {
+			t.Skip()
+			return
+		}
+		panicIfInvalid(src, start, end)
+	})
+}
+
 type testInput struct {
 	name        string
 	input       string

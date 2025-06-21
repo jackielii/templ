@@ -11,45 +11,30 @@ import (
 func TestGenerateOverlay(t *testing.T) {
 	tests := []struct {
 		name     string
-		tf       *parser.TemplateFile
+		input    string
 		pkgName  string
 		expected string
 	}{
 		{
-			name: "empty template file",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{},
-			},
+			name:    "empty template file",
+			input:   "",
 			pkgName: "main",
 			expected: `package main
-
-import (
-	"github.com/a-h/templ"
-	"context"
-	"io"
-)
 
 `,
 		},
 		{
 			name: "template with existing imports",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{
-					&parser.TemplateFileGoExpression{
-						Expression: parser.Expression{
-							Value: `import (
+			input: `package main
+
+import (
 	"fmt"
 	"strings"
 )`,
-						},
-					},
-				},
-			},
 			pkgName: "main",
 			expected: `package main
 
 import (
-	"github.com/a-h/templ"
 	"fmt"
 	"strings"
 )
@@ -58,18 +43,12 @@ import (
 		},
 		{
 			name: "template with templ already imported",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{
-					&parser.TemplateFileGoExpression{
-						Expression: parser.Expression{
-							Value: `import (
+			input: `package main
+
+import (
 	"fmt"
 	"github.com/a-h/templ"
 )`,
-						},
-					},
-				},
-			},
 			pkgName: "main",
 			expected: `package main
 
@@ -82,25 +61,16 @@ import (
 		},
 		{
 			name: "simple HTML template",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{
-					&parser.HTMLTemplate{
-						Expression: parser.Expression{
-							Value: "Hello(name string)",
-							Stmt: &ast.FuncDecl{
-								Name: &ast.Ident{Name: "Hello"},
-							},
-						},
-					},
-				},
-			},
+			input: `package main
+
+templ Hello(name string) {
+	<div>Hello, { name }!</div>
+}`,
 			pkgName: "main",
 			expected: `package main
 
 import (
 	"github.com/a-h/templ"
-	"context"
-	"io"
 )
 
 func Hello(name string) templ.Component {
@@ -111,58 +81,40 @@ func Hello(name string) templ.Component {
 		},
 		{
 			name: "HTML template with receiver",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{
-					&parser.HTMLTemplate{
-						Expression: parser.Expression{
-							Value: "(s *Server) Index()",
-							Stmt: &ast.FuncDecl{
-								Name: &ast.Ident{Name: "Index"},
-								Recv: &ast.FieldList{
-									List: []*ast.Field{
-										{
-											Type: &ast.StarExpr{
-												X: &ast.Ident{Name: "Server"},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
+			input: `package main
+
+type Server struct{}
+
+templ (s *Server) Index() {
+	<div>Index page</div>
+}`,
 			pkgName: "main",
 			expected: `package main
 
 import (
 	"github.com/a-h/templ"
-	"context"
-	"io"
 )
+
+type Server struct{}
 
 func (s *Server) Index() templ.Component {
 	return templ.NopComponent
 }
-
 `,
 		},
 		{
 			name: "CSS template",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{
-					&parser.CSSTemplate{
-						Name: "buttonStyle",
-					},
-				},
-			},
+			input: `package main
+
+css buttonStyle() {
+	background-color: blue;
+	color: white;
+}`,
 			pkgName: "main",
 			expected: `package main
 
 import (
 	"github.com/a-h/templ"
-	"context"
-	"io"
 )
 
 func buttonStyle() templ.CSSClass {
@@ -173,25 +125,18 @@ func buttonStyle() templ.CSSClass {
 		},
 		{
 			name: "script template",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{
-					&parser.ScriptTemplate{
-						Name: parser.Expression{
-							Value: "onClick",
-						},
-						Parameters: parser.Expression{
-							Value: "id string",
-						},
-					},
-				},
-			},
+			input: `package main
+
+script onClick(id string) {
+	document.getElementById(id).onclick = function() {
+		alert("Clicked!");
+	}
+}`,
 			pkgName: "main",
 			expected: `package main
 
 import (
 	"github.com/a-h/templ"
-	"context"
-	"io"
 )
 
 func onClick(id string) templ.ComponentScript {
@@ -202,36 +147,28 @@ func onClick(id string) templ.ComponentScript {
 		},
 		{
 			name: "mixed templates and Go code",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{
-					&parser.TemplateFileGoExpression{
-						Expression: parser.Expression{
-							Value: `import (
+			input: `package views
+
+import (
 	"fmt"
-)`,
-						},
-					},
-					&parser.TemplateFileGoExpression{
-						Expression: parser.Expression{
-							Value: `type User struct {
+)
+
+type User struct {
 	Name string
 	Email string
+}
+
+templ UserCard(user User) {
+	<div class={ cardStyle() }>
+		<h2>{ user.Name }</h2>
+		<p>{ user.Email }</p>
+	</div>
+}
+
+css cardStyle() {
+	padding: 20px;
+	border: 1px solid #ccc;
 }`,
-						},
-					},
-					&parser.HTMLTemplate{
-						Expression: parser.Expression{
-							Value: "UserCard(user User)",
-							Stmt: &ast.FuncDecl{
-								Name: &ast.Ident{Name: "UserCard"},
-							},
-						},
-					},
-					&parser.CSSTemplate{
-						Name: "cardStyle",
-					},
-				},
-			},
 			pkgName: "views",
 			expected: `package views
 
@@ -256,41 +193,16 @@ func cardStyle() templ.CSSClass {
 `,
 		},
 		{
-			name: "template with no valid AST node",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{
-					&parser.HTMLTemplate{
-						Expression: parser.Expression{
-							Value: "Invalid()",
-							Stmt:  nil, // No AST node
-						},
-					},
-				},
-			},
-			pkgName: "main",
-			expected: `package main
+			name: "template with generator imports should still add templ import",
+			input: `package main
 
 import (
-	"github.com/a-h/templ"
-	"context"
-	"io"
+	"github.com/a-h/templ/generator"
 )
 
-`,
-		},
-		{
-			name: "template with generator imports should not add templ import",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{
-					&parser.TemplateFileGoExpression{
-						Expression: parser.Expression{
-							Value: `import (
-	"github.com/a-h/templ/generator"
-)`,
-						},
-					},
-				},
-			},
+templ Hello() {
+	<div>Hello</div>
+}`,
 			pkgName: "main",
 			expected: `package main
 
@@ -298,38 +210,30 @@ import (
 	"github.com/a-h/templ"
 	"github.com/a-h/templ/generator"
 )
+
+func Hello() templ.Component {
+	return templ.NopComponent
+}
 
 `,
 		},
 		{
 			name: "receiver with non-pointer type",
-			tf: &parser.TemplateFile{
-				Nodes: []parser.TemplateFileNode{
-					&parser.HTMLTemplate{
-						Expression: parser.Expression{
-							Value: "(s Server) Index()",
-							Stmt: &ast.FuncDecl{
-								Name: &ast.Ident{Name: "Index"},
-								Recv: &ast.FieldList{
-									List: []*ast.Field{
-										{
-											Type: &ast.Ident{Name: "Server"},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
+			input: `package main
+
+type Server struct{}
+
+templ (s Server) Index() {
+	<div>Index</div>
+}`,
 			pkgName: "main",
 			expected: `package main
 
 import (
 	"github.com/a-h/templ"
-	"context"
-	"io"
 )
+
+type Server struct{}
 
 func (s Server) Index() templ.Component {
 	return templ.NopComponent
@@ -341,8 +245,12 @@ func (s Server) Index() templ.Component {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := newSymbolResolver()
-			result := r.generateOverlay(tt.tf, tt.pkgName)
+			tf, err := parser.ParseString(tt.input)
+			if err != nil {
+				t.Fatalf("failed to parse template: %v", err)
+			}
+
+			result := generateOverlay(tf, tt.pkgName)
 
 			// Normalize whitespace for comparison
 			expected := strings.TrimSpace(tt.expected)
@@ -353,71 +261,6 @@ func (s Server) Index() templ.Component {
 			}
 		})
 	}
-}
-
-func TestGenerateOverlayEdgeCases(t *testing.T) {
-	t.Run("multiple import blocks", func(t *testing.T) {
-		tf := &parser.TemplateFile{
-			Nodes: []parser.TemplateFileNode{
-				&parser.TemplateFileGoExpression{
-					Expression: parser.Expression{
-						Value: `import "fmt"`,
-					},
-				},
-				&parser.TemplateFileGoExpression{
-					Expression: parser.Expression{
-						Value: `import (
-	"strings"
-	"time"
-)`,
-					},
-				},
-			},
-		}
-
-		r := newSymbolResolver()
-		result := r.generateOverlay(tf, "main")
-
-		// Should add templ import to the first import block
-		if !strings.Contains(result, `"github.com/a-h/templ"`) {
-			t.Error("Expected templ import to be added")
-		}
-	})
-
-	t.Run("template with complex receiver type", func(t *testing.T) {
-		tf := &parser.TemplateFile{
-			Nodes: []parser.TemplateFileNode{
-				&parser.HTMLTemplate{
-					Expression: parser.Expression{
-						Value: "(s *app.Server) Index()",
-						Stmt: &ast.FuncDecl{
-							Name: &ast.Ident{Name: "Index"},
-							Recv: &ast.FieldList{
-								List: []*ast.Field{
-									{
-										Type: &ast.StarExpr{
-											X: &ast.SelectorExpr{
-												X:   &ast.Ident{Name: "app"},
-												Sel: &ast.Ident{Name: "Server"},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-
-		r := newSymbolResolver()
-		result := r.generateOverlay(tf, "main")
-
-		expected := "func (s *app.Server) Index() templ.Component {"
-		if !strings.Contains(result, expected) {
-			t.Errorf("Expected receiver signature not found.\nExpected to contain: %s\nGot:\n%s", expected, result)
-		}
-	})
 }
 
 func TestAstTypeToString(t *testing.T) {

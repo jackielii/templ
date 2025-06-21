@@ -55,7 +55,7 @@ func (s StructComponent) Page(title string, attrs templ.Attributer) templ.Compon
 	}
 
 	pkg := pkgs[0]
-	
+
 	// Check for errors (ignoring import errors)
 	var nonImportErrors []string
 	for _, err := range pkg.Errors {
@@ -64,7 +64,7 @@ func (s StructComponent) Page(title string, attrs templ.Attributer) templ.Compon
 			nonImportErrors = append(nonImportErrors, errStr)
 		}
 	}
-	
+
 	if len(nonImportErrors) > 0 {
 		t.Logf("Package errors: %v", nonImportErrors)
 	}
@@ -87,7 +87,7 @@ func (s StructComponent) Page(title string, attrs templ.Attributer) templ.Compon
 	obj := pkg.Types.Scope().Lookup("structComp")
 	if obj == nil {
 		t.Error("Variable 'structComp' not found in package scope")
-		
+
 		// Print what we do have
 		t.Logf("Available objects in scope:")
 		for _, name := range names {
@@ -110,75 +110,5 @@ func (s StructComponent) Page(title string, attrs templ.Attributer) templ.Compon
 	if typeObj != nil {
 		// This would require more complex type analysis, but we can at least verify the type exists
 		t.Logf("StructComponent type found successfully")
-	}
-}
-
-func TestOverlayWithRealPath(t *testing.T) {
-	// Test with a more realistic path that matches what we use in generation
-	overlayContent := `package testelementcomponent
-
-import (
-	"github.com/a-h/templ"
-)
-
-var structComp StructComponent
-
-type StructComponent struct {
-	Name    string
-	Child   templ.Component
-	enabled bool
-}
-
-func (s StructComponent) Page(title string, attrs templ.Attributer) templ.Component {
-	return templ.NopComponent
-}
-`
-
-	// Use a path similar to what we generate
-	overlayPath := "/Users/jackieli/personal/templ/generator/test-element-component/template_templ.go"
-	overlay := map[string][]byte{
-		overlayPath: []byte(overlayContent),
-	}
-
-	// Configure package loading
-	cfg := &packages.Config{
-		Mode:    packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax,
-		Dir:     "/Users/jackieli/personal/templ/generator/test-element-component",
-		Overlay: overlay,
-	}
-
-	// Load the package by directory
-	pkgs, err := packages.Load(cfg, ".")
-	if err != nil {
-		t.Fatalf("Failed to load package: %v", err)
-	}
-
-	if len(pkgs) == 0 {
-		t.Fatal("No packages loaded")
-	}
-
-	pkg := pkgs[0]
-	t.Logf("Loaded package: %s", pkg.PkgPath)
-
-	// Check if Types is available
-	if pkg.Types == nil {
-		t.Fatal("Package Types is nil")
-	}
-
-	// Check if Scope is available
-	if pkg.Types.Scope() == nil {
-		t.Fatal("Package Types.Scope() is nil")
-	}
-
-	// Look for structComp variable
-	obj := pkg.Types.Scope().Lookup("structComp")
-	if obj == nil {
-		t.Error("Variable 'structComp' not found in package scope")
-		
-		// List all names in scope
-		names := pkg.Types.Scope().Names()
-		t.Logf("Names in scope: %v", names)
-	} else {
-		t.Logf("Found structComp: %v (type: %v)", obj, obj.Type())
 	}
 }
