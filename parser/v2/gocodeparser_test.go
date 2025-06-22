@@ -1,9 +1,6 @@
 package parser
 
 import (
-	"go/ast"
-	"go/token"
-	"strings"
 	"testing"
 
 	"github.com/a-h/parse"

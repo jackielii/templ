@@ -705,7 +705,7 @@ func (r *symbolResolver) registerSingleFileWithDependencies(tf *parser.TemplateF
 	if r.depGraph != nil {
 		return nil
 	}
-	
+
 	// First register the main file
 	if err := r.registerTemplOverlay(tf, fileName); err != nil {
 		return err
