@@ -105,11 +105,28 @@ func getGoGenDeclParser(keywords ...string) parse.Parser[*TemplateFileGoExpressi
 	})
 }
 
+var goFuncDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
+	if !peekPrefix(pi, "func ", "func\t", "func(", "func (") {
+		return
+	}
+
+	expr, err := parseGo("func", pi, goexpression.Func)
+	if err != nil {
+		return nil, false, err
+	}
+
+	n = &TemplateFileGoExpression{
+		Expression: expr,
+	}
+
+	return n, true, nil
+})
+
 var (
-	goImportParser    = getGoGenDeclParser("import", "import\t", "import(", "import (")
-	goFuncDeclParser  = getGoGenDeclParser("func", "func\t", "func(", "func (")
-	goConstDeclParser = getGoGenDeclParser("const", "const\t", "const(", "const (")
-	goTypeDeclParser  = getGoGenDeclParser("type", "type\t")
+	goImportParser    = getGoGenDeclParser("import ", "import\t", "import(", "import (", "import\t(")
+	goConstDeclParser = getGoGenDeclParser("const ", "const\t", "const(", "const (", "const\t(")
+	goTypeDeclParser  = getGoGenDeclParser("type ", "type\t", "type(", "type (", "type\t(")
+	goVarDeclParser   = getGoGenDeclParser("var ", "var\t", "var(", "var (", "var\t(")
 )
 
 // consumeTrailingSemicolon checks for a trailing semicolon and consumes it if present,
