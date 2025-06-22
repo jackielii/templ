@@ -120,8 +120,7 @@ func (g *generator) reorderElementComponentAttributes(sig componentSignature, n 
 	attrMap := make(map[string]parser.Attribute)
 	keyMap := make(map[string]parser.ConstantAttributeKey)
 
-	// Debug
-	fmt.Printf("Debug: reorderElementComponentAttributes for %s with %d attributes\n", n.Name, len(n.Attributes))
+	// Debug: reorderElementComponentAttributes for %s with %d attributes
 
 	for _, attr := range n.Attributes {
 		keyed, ok := attr.(parser.KeyedAttribute)
@@ -497,11 +496,7 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 		if err != nil {
 			return fmt.Errorf("component %s at %s:%d:%d: %w", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col, err)
 		}
-		// Debug: print signature info
-		fmt.Printf("Debug: Component %s has %d parameters\n", n.Name, len(sigs.parameters))
-		for i, p := range sigs.parameters {
-			fmt.Printf("  [%d] %s: %s\n", i, p.name, p.typ)
-		}
+		// Debug: Component %s has %d parameters
 	}
 
 	var vars []string

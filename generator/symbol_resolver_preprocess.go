@@ -168,13 +168,6 @@ func PreprocessTemplFiles(rootDir string, templFiles []string) (*PreprocessResul
 				if tmpl, ok := n.(*parser.HTMLTemplate); ok {
 					sig := extractTemplateSignature(tmpl, pkg)
 					if sig.name != "" {
-						// Debug
-						if sig.name == "Button" {
-							fmt.Printf("Debug PreprocessTemplFiles: Caching Button with %d params\n", len(sig.parameters))
-							for _, p := range sig.parameters {
-								fmt.Printf("  - %s: %s\n", p.name, p.typ)
-							}
-						}
 						// Only cache by qualified name to avoid conflicts
 						globalSymbolResolver.signatures[sig.qualifiedName] = sig
 					}

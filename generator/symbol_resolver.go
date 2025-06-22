@@ -684,12 +684,16 @@ func (r *symbolResolver) registerTemplOverlay(tf *parser.TemplateFile, fileName 
 
 	// Generate overlay only for this specific file
 	overlayContent := generateOverlay(tf, pkgName)
-	fmt.Printf("Debug: Generated overlay for %s:\n%s\n", overlayPath, overlayContent)
+	// Debug: Generated overlay for %s
 	r.overlay[overlayPath] = []byte(overlayContent)
 
-	// Clear package cache when overlay changes since cached packages won't have the new overlay
-	// This is important when processing multiple files
-	r.packageCache = make(map[string]*packages.Package)
+	// Only clear package cache during preprocessing phase (when depGraph is nil)
+	// During generation phase, we want to reuse the cached packages
+	if r.depGraph == nil {
+		// Clear package cache when overlay changes since cached packages won't have the new overlay
+		// This is important when processing multiple files during preprocessing
+		r.packageCache = make(map[string]*packages.Package)
+	}
 
 	return nil
 }
@@ -697,6 +701,11 @@ func (r *symbolResolver) registerTemplOverlay(tf *parser.TemplateFile, fileName 
 // registerSingleFileWithDependencies registers overlays for a single file and its dependencies
 // This is used when processing a single file without full preprocessing
 func (r *symbolResolver) registerSingleFileWithDependencies(tf *parser.TemplateFile, fileName string) error {
+	// If preprocessing has been done (depGraph exists), overlays are already registered
+	if r.depGraph != nil {
+		return nil
+	}
+	
 	// First register the main file
 	if err := r.registerTemplOverlay(tf, fileName); err != nil {
 		return err
@@ -820,9 +829,9 @@ func (r *symbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*p
 	// Only apply overlay for internal packages
 	if useOverlay {
 		cfg.Overlay = r.overlay
-		fmt.Printf("Debug ensurePackageLoaded: Loading %s from %s with %d overlay entries\n", pattern, fromDir, len(r.overlay))
+		// Debug: Loading %s from %s with %d overlay entries
 	} else {
-		fmt.Printf("Debug ensurePackageLoaded: Loading %s from %s without overlay\n", pattern, fromDir)
+		// Debug: Loading %s from %s without overlay
 	}
 
 	pkgs, err := packages.Load(cfg, pattern)
@@ -835,7 +844,7 @@ func (r *symbolResolver) ensurePackageLoaded(fromDir string, pattern string) (*p
 	}
 
 	pkg := pkgs[0]
-	fmt.Printf("Debug ensurePackageLoaded: Loaded package %s, types=%v, %d errors\n", pkg.PkgPath, pkg.Types != nil, len(pkg.Errors))
+	// Debug: Loaded package %s, types=%v, %d errors
 
 	// For internal packages, allow certain errors from overlays
 	if isInternal && len(pkg.Errors) > 0 {

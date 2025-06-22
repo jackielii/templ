@@ -42,7 +42,6 @@ func StyleTagsAreSupported() templ.Component {
 }
 
 // CSS components.
-
 const red = "#00ff00"
 
 func cssComponentGreen() templ.CSSClass {

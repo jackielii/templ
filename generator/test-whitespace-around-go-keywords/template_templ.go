@@ -59,7 +59,9 @@ func WhitespaceIsConsistentInIf(firstIf, secondIf bool) templ.Component {
 }
 
 const WhitespaceIsConsistentInTrueIfExpected = `<button>Start</button> <button>If</button> <button>End</button>`
+
 const WhitespaceIsConsistentInTrueElseIfExpected = `<button>Start</button> <button>ElseIf</button> <button>End</button>`
+
 const WhitespaceIsConsistentInTrueElseExpected = `<button>Start</button> <button>Else</button> <button>End</button>`
 
 func WhitespaceIsConsistentInFalseIf() templ.Component {
@@ -149,6 +151,7 @@ func WhitespaceIsConsistentInSwitch(i int) templ.Component {
 }
 
 const WhitespaceIsConsistentInOneSwitchExpected = `<button>Start</button> <button>1</button> <button>End</button>`
+
 const WhitespaceIsConsistentInDefaultSwitchExpected = `<button>Start</button> <button>default</button> <button>End</button>`
 
 func WhitespaceIsConsistentInSwitchNoDefault() templ.Component {
@@ -246,7 +249,9 @@ func WhitespaceIsConsistentInFor(i int) templ.Component {
 }
 
 const WhitespaceIsConsistentInForZeroExpected = `<button>Start</button> <button>End</button>`
+
 const WhitespaceIsConsistentInForOneExpected = `<button>Start</button> <button>0</button> <button>End</button>`
+
 const WhitespaceIsConsistentInForThreeExpected = `<button>Start</button> <button>0</button> <button>1</button> <button>2</button> <button>End</button>`
 
 var _ = templruntime.GeneratedTemplate

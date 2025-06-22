@@ -6,6 +6,8 @@ This document provides an in-depth analysis of the symbol resolution system in t
 
 The symbol resolver is the central component for type resolution in templ, enabling proper type checking and code generation for templ templates. It leverages Go's type system through overlays instead of string-based parsing. The system has been unified into a single resolver that combines component, variable, and expression resolution capabilities.
 
+**Major Update**: With the recent parser v2 enhancements, all Go declarations now include their AST nodes in the `Expression.Stmt` field, eliminating the need for manual string parsing throughout the symbol resolver.
+
 ## Core Design Principles
 
 ### 1. Overlay-based Resolution
@@ -206,30 +208,187 @@ Enhanced expression analysis:
 - Proper package resolution across module boundaries
 - Cached module locations for performance
 
+## AST-Based Refactoring Plan
+
+### Current Manual Parsing Functions to Replace
+
+With AST nodes now available in `Expression.Stmt`, we can eliminate these manual parsing functions:
+
+1. **Import Processing**:
+   - `parseImportPath()` in `symbol_resolver.go:157-204` - Uses regex and string manipulation to extract import paths
+   - `extractImports()` in `symbol_resolver_preprocess.go:341-379` - Line-by-line string parsing for imports
+   - `extractImportPath()` in `symbol_resolver_preprocess.go:382-393` - String index-based extraction
+   - `extractImportsWithAliases()` in `symbol_resolver.go:556-605` - Partially uses AST but still string-based
+   - Replace with: Direct AST traversal of `Expression.Stmt.(*ast.GenDecl)` with `token.IMPORT`
+
+2. **Template Signature Processing**:
+   - `extractTemplateSignature()` in `symbol_resolver_preprocess.go:189-273` - String manipulation to extract function names and parameters
+   - `getTemplateName()` in `symbol_resolver.go` - String-based template name extraction
+   - Replace with: Use AST from `HTMLTemplate.Expression` which should contain parsed function declaration
+
+3. **Go Code Processing in Overlays**:
+   - `generateOverlay()` in `symbol_resolver.go:398-547` - String manipulation to build overlay files
+   - Manual checks for "import", "type", etc. using `strings.Contains()`
+   - Replace with: Use AST nodes to generate accurate Go code
+
+4. **Variable Extraction**:
+   - `extractForLoopVariablesFallback()` - String-based fallback for loop variable extraction
+   - `extractIfConditionVariablesFallback()` - String-based fallback for if condition variables
+   - Replace with: Direct AST traversal of `*ast.ForStmt`, `*ast.RangeStmt`, `*ast.IfStmt`
+
+### Refactoring Strategy
+
+#### Phase 1: AST Helper Functions
+Create helper functions to extract information from AST nodes:
+
+```go
+// extractImportsFromAST extracts import information from AST nodes
+func extractImportsFromAST(nodes []*parser.TemplateFileGoExpression) map[string]string {
+    imports := make(map[string]string)
+    for _, node := range nodes {
+        if node.Expression.Stmt == nil {
+            continue
+        }
+        if genDecl, ok := node.Expression.Stmt.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
+            for _, spec := range genDecl.Specs {
+                if impSpec, ok := spec.(*ast.ImportSpec); ok {
+                    path := strings.Trim(impSpec.Path.Value, `"`)
+                    var alias string
+                    if impSpec.Name != nil {
+                        alias = impSpec.Name.Name
+                    } else {
+                        // Extract package name from path
+                        parts := strings.Split(path, "/")
+                        alias = parts[len(parts)-1]
+                    }
+                    imports[alias] = path
+                }
+            }
+        }
+    }
+    return imports
+}
+
+// extractFunctionSignatureFromAST extracts function signature from AST
+func extractFunctionSignatureFromAST(expr *parser.Expression) *componentSignature {
+    if expr.Stmt == nil {
+        return nil
+    }
+    if funcDecl, ok := expr.Stmt.(*ast.FuncDecl); ok {
+        // Extract name, parameters, and return type
+        // No more string parsing needed
+    }
+}
+```
+
+#### Phase 2: Update Symbol Resolver Methods
+Modify existing methods to use AST nodes:
+
+1. **Update `resolveImportAlias()`** in `symbol_resolver.go:143-154`:
+   ```go
+   func (r *symbolResolver) resolveImportAlias(alias string, tf *parser.TemplateFile) string {
+       for _, node := range tf.Nodes {
+           if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
+               if goExpr.Expression.Stmt == nil {
+                   continue
+               }
+               // Use AST instead of parseImportPath()
+               if imports := extractImportsFromAST([]*parser.TemplateFileGoExpression{goExpr}); imports[alias] != "" {
+                   return imports[alias]
+               }
+           }
+       }
+       return ""
+   }
+   ```
+
+2. **Update `generateOverlay()`** in `symbol_resolver.go:398-547`:
+   - Replace string checks with AST type checks
+   - Use AST nodes to preserve exact syntax
+   - Generate code from AST instead of string manipulation
+
+3. **Update `extractTemplateSignature()`** in `symbol_resolver_preprocess.go:189-273`:
+   - Use `HTMLTemplate.Expression` AST if available
+   - Fall back to parsing only if AST is missing
+   - Extract parameters from `*ast.FuncDecl` directly
+
+#### Phase 3: Remove String-Based Parsing
+Once AST-based methods are working:
+1. Remove all manual parsing functions
+2. Remove regex-based extraction
+3. Simplify error handling (AST parsing already validated)
+
+### Benefits of AST-Based Approach
+
+1. **Accuracy**: No more regex or string manipulation errors
+2. **Completeness**: Access to all syntax information (comments, positions, etc.)
+3. **Maintainability**: Leverage Go's standard AST types
+4. **Performance**: Parse once, use everywhere
+5. **Type Safety**: Direct access to typed AST nodes
+
+### Implementation Order
+
+1. **Step 1: Import Processing Refactor**
+   - Replace `parseImportPath()`, `extractImports()`, `extractImportPath()`
+   - Update `resolveImportAlias()` to use AST
+   - Test with various import styles (single, multi-line, aliases)
+
+2. **Step 2: Overlay Generation Refactor**
+   - Update `generateOverlay()` to use AST nodes
+   - Preserve exact syntax from original code
+   - Handle all Go declaration types properly
+
+3. **Step 3: Template Signature Extraction**
+   - Check if `HTMLTemplate.Expression` contains AST
+   - Update `extractTemplateSignature()` to use AST
+   - Handle both regular functions and methods
+
+4. **Step 4: Variable Extraction**
+   - Update `extractForLoopVariables()` to use AST directly
+   - Update `extractIfConditionVariables()` to use AST
+   - Remove fallback string parsing functions
+
+5. **Step 5: Cleanup**
+   - Remove all deprecated string parsing functions
+   - Update tests to verify AST-based functionality
+   - Document the new AST-based approach
+
 ## Future Enhancement Opportunities
 
 ### 1. Generic Type Support
-- Track generic type parameters through expressions
+- Track generic type parameters through AST
 - Support type inference for generic components
+- Handle type constraints properly
 
 ### 2. Advanced Control Flow
-- Switch statement type narrowing
-- Range over map key/value type extraction
+- Switch statement type narrowing using AST
+- Range over map key/value type extraction from AST
 - Select statement channel type analysis
 
 ### 3. Performance Optimizations
-- Parallel package loading for multiple imports
-- Incremental cache updates for file changes
-- AST node reuse for common patterns
+- Cache parsed AST nodes for reuse
+- Parallel AST traversal for large files
+- Incremental AST updates for file changes
 
 ## Integration Points
 
 The unified symbol resolver integrates with:
 1. **Code Generator**: Provides type information with full context awareness
-2. **Parser**: Receives AST nodes for analysis and variable extraction
-3. **LSP**: Enhanced diagnostics with proper type resolution
+2. **Parser v2**: Receives AST nodes in `Expression.Stmt` for direct analysis
+3. **LSP**: Enhanced diagnostics with proper type resolution using AST
 4. **Formatter**: Skip resolution option for performance when not needed
-5. **Import Processing**: Automatic module detection for proper resolution
+5. **Import Processing**: Direct AST-based import resolution
+
+### Parser v2 Integration
+
+The parser v2 now provides AST nodes for all Go declarations:
+- `goImportParser`: Returns `*ast.ImportSpec` in `Expression.Stmt`
+- `goConstDeclParser`: Returns `*ast.GenDecl` with `Tok = token.CONST`
+- `goTypeDeclParser`: Returns `*ast.GenDecl` with `Tok = token.TYPE`
+- `goVarDeclParser`: Returns `*ast.GenDecl` with `Tok = token.VAR`
+- `goFuncDeclParser`: Returns `*ast.FuncDecl` for both functions and methods
+
+These AST nodes eliminate the need for manual string parsing throughout the symbol resolver.
 
 ## Current Architecture Problem
 
@@ -353,6 +512,32 @@ The `g.enableSymbolResolution` flag is a temporary hack because the ideal depend
      - If it's outside our dependency tree: treat as external package
      - External packages are loaded without overlays (like go mod externals)
    - This prevents redundant loading and ensures correct behavior
+
+## Summary of AST-Based Refactoring
+
+With the parser v2 enhancements completed, we now have full AST support for all Go declarations in templ files. This enables a complete refactoring of the symbol resolver to eliminate manual string parsing.
+
+### Key Changes:
+1. **Parser v2 provides AST nodes** in `Expression.Stmt` for:
+   - Imports: `*ast.GenDecl` with `token.IMPORT` containing `*ast.ImportSpec`
+   - Constants: `*ast.GenDecl` with `token.CONST`
+   - Types: `*ast.GenDecl` with `token.TYPE`
+   - Variables: `*ast.GenDecl` with `token.VAR`
+   - Functions/Methods: `*ast.FuncDecl`
+
+2. **Manual parsing functions to eliminate**:
+   - `parseImportPath()`, `extractImports()`, `extractImportPath()`
+   - `extractTemplateSignature()` string manipulation
+   - String-based checks in `generateOverlay()`
+   - Fallback functions for variable extraction
+
+3. **Benefits of AST-based approach**:
+   - Accurate parsing with Go's standard parser
+   - Access to complete syntax information
+   - Elimination of regex and string manipulation errors
+   - Better maintainability and type safety
+
+The refactoring will make the symbol resolver more robust, accurate, and maintainable by leveraging the AST nodes now available from the parser.
 
 ## Conclusion
 

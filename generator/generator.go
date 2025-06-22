@@ -1724,12 +1724,15 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 	}
 
 	// In this block, we want to support { child } expression for templ.Component variables.
-	// Try to resolve the expression using context
-	exprValue := strings.TrimSpace(e.Value)
-	typeInfo, err := g.symbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
-	if err == nil && typeInfo.isComponent {
-		// This is a component, use call template expression logic
-		return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})
+	// Only attempt resolution if symbol resolution is enabled and preprocessing has been done
+	if !g.options.SkipSymbolResolution && g.symbolResolver != nil && g.symbolResolver.depGraph != nil {
+		// Try to resolve the expression using context
+		exprValue := strings.TrimSpace(e.Value)
+		typeInfo, err := g.symbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
+		if err == nil && typeInfo.isComponent {
+			// This is a component, use call template expression logic
+			return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})
+		}
 	}
 
 	var r parser.Range
