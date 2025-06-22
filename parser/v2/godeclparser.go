@@ -80,100 +80,35 @@ var goCommentParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpress
 	return nil, false, nil
 })
 
-var goImportParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
-	if !peekPrefix(pi, "import ", "import\t", "import(", "import (") {
-		return
-	}
+// getGoGenDeclParser returns a parser for Go declaration expressions like import, func, const, and type.
+func getGoGenDeclParser(keywords ...string) parse.Parser[*TemplateFileGoExpression] {
+	return parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
+		if !peekPrefix(pi, keywords...) {
+			return
+		}
 
-	expr, err := parseGo("import", pi, goexpression.GenDecl)
-	if err != nil {
-		return nil, false, err
-	}
+		expr, err := parseGo(strings.Join(keywords, ","), pi, goexpression.GenDecl)
+		if err != nil {
+			return nil, false, err
+		}
 
-	n = &TemplateFileGoExpression{
-		Expression: expr,
-	}
+		// Check for trailing semicolon and consume it if present
+		consumeTrailingSemicolon(pi, &expr)
 
-	return n, true, nil
-})
+		n = &TemplateFileGoExpression{
+			Expression: expr,
+		}
 
-var goFuncDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
-	if !peekPrefix(pi, "func ", "func\t", "func(", "func (") {
-		return
-	}
+		return n, true, nil
+	})
+}
 
-	expr, err := parseGo("func", pi, goexpression.Func)
-	if err != nil {
-		return nil, false, err
-	}
-
-	n = &TemplateFileGoExpression{
-		Expression: expr,
-	}
-
-	return n, true, nil
-})
-
-var goConstDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
-	if !peekPrefix(pi, "const ", "const\t", "const(", "const (") {
-		return
-	}
-
-	// Use parseGo with the standard approach
-	expr, err := parseGo("const", pi, goexpression.GenDecl)
-	if err != nil {
-		return nil, false, err
-	}
-
-	// Check for trailing semicolon and consume it if present
-	consumeTrailingSemicolon(pi, &expr)
-
-	n = &TemplateFileGoExpression{
-		Expression: expr,
-	}
-
-	return n, true, nil
-})
-
-var goTypeDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
-	if !peekPrefix(pi, "type ", "type\t") {
-		return
-	}
-
-	expr, err := parseGo("type", pi, goexpression.GenDecl)
-	if err != nil {
-		return nil, false, err
-	}
-
-	// Check for trailing semicolon and consume it if present
-	consumeTrailingSemicolon(pi, &expr)
-
-	n = &TemplateFileGoExpression{
-		Expression: expr,
-	}
-
-	return n, true, nil
-})
-
-var goVarDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
-	if !peekPrefix(pi, "var ", "var\t", "var(", "var (") {
-		return
-	}
-
-	// Use parseGo with a custom extractor that includes the "var" keyword
-	expr, err := parseGo("var", pi, goexpression.GenDecl)
-	if err != nil {
-		return nil, false, nil
-	}
-
-	consumeTrailingSemicolon(pi, &expr)
-
-	n = &TemplateFileGoExpression{
-		Expression: expr,
-	}
-
-	return n, true, nil
-})
+var (
+	goImportParser    = getGoGenDeclParser("import", "import\t", "import(", "import (")
+	goFuncDeclParser  = getGoGenDeclParser("func", "func\t", "func(", "func (")
+	goConstDeclParser = getGoGenDeclParser("const", "const\t", "const(", "const (")
+	goTypeDeclParser  = getGoGenDeclParser("type", "type\t")
+)
 
 // consumeTrailingSemicolon checks for a trailing semicolon and consumes it if present,
 // updating the expression to include it. It also consumes any whitespace before the semicolon.
