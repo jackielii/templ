@@ -87,11 +87,9 @@ func getGoGenDeclParser(keywords ...string) parse.Parser[*TemplateFileGoExpressi
 			return
 		}
 
-		start := pi.Position()
 		expr, err := parseGo(strings.Join(keywords, ","), pi, goexpression.GenDecl)
 		if err != nil {
-			pi.Seek(start.Index) // Backtrack if parsing fails
-			return nil, false, nil
+			return nil, false, err
 		}
 
 		// Check for trailing semicolon and consume it if present
@@ -105,6 +103,7 @@ func getGoGenDeclParser(keywords ...string) parse.Parser[*TemplateFileGoExpressi
 	})
 }
 
+// goFuncDeclParser parses func and method declarations in Go.
 var goFuncDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
 	if !peekPrefix(pi, "func ", "func\t", "func(", "func (") {
 		return

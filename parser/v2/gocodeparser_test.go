@@ -1,5 +1,7 @@
 package parser
 
+import ()
+
 import (
 	"go/ast"
 	"go/token"
@@ -203,9 +205,11 @@ func TestGoImportParser(t *testing.T) {
 			},
 		},
 		{
-			name:     "empty import block",
-			input:    `import ()`,
-			expected: nil, // Empty import blocks are handled by default Go parser
+			name:  "empty import block",
+			input: `import ()`,
+			expected: &TemplateFileGoExpression{
+				Expression: NewExpression(`import ()`, parse.Position{Index: 0, Line: 1, Col: 1}, parse.Position{Index: 9, Line: 1, Col: 10}),
+			},
 		},
 		{
 			name:  "import with dot",
