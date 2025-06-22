@@ -755,56 +755,53 @@ func TestFunc(t *testing.T) {
 var importTests = []testInput{
 	{
 		name:  "basic import",
-		input: `"fmt"`,
+		input: `import "fmt"`,
 	},
 	{
 		name:  "import with alias",
-		input: `f "fmt"`,
+		input: `import f "fmt"`,
 	},
 	{
 		name:  "import with dot",
-		input: `. "fmt"`,
+		input: `import . "fmt"`,
 	},
 	{
 		name:  "import with underscore",
-		input: `_ "fmt"`,
+		input: `import _ "fmt"`,
 	},
 	{
 		name:  "import with path",
-		input: `"github.com/a-h/templ"`,
+		input: `import "github.com/a-h/templ"`,
 	},
 	{
 		name:  "import with alias and path",
-		input: `templ "github.com/a-h/templ"`,
+		input: `import templ "github.com/a-h/templ"`,
 	},
 	{
 		name:  "import with escaped quotes",
-		input: `"github.com/test/\"quoted\""`,
+		input: `import "github.com/test/\"quoted\""`,
 	},
 	{
 		name:  "import with spaces",
-		input: `  "fmt"`,
+		input: `import   "fmt"`,
 	},
 	{
 		name:  "import with alias and spaces",
-		input: `  myalias   "fmt"`,
+		input: `import   myalias   "fmt"`,
 	},
 }
 
 func TestImport(t *testing.T) {
-	prefix := "import "
+	prefix := ""
 	suffixes := []string{
 		"",
 		"\n",
 		"\nvar x = 1",
 		"\n\nfunc main() {}",
 	}
-	importWrapper := func(content string) (start, end int, stmt any, err error) {
-		return Import(content)
-	}
 	for _, test := range importTests {
 		for i, suffix := range suffixes {
-			t.Run(fmt.Sprintf("%s_%d", test.name, i), run(test, prefix, suffix, importWrapper))
+			t.Run(fmt.Sprintf("%s_%d", test.name, i), run(test, prefix, suffix, GenDecl))
 		}
 	}
 }
@@ -830,7 +827,7 @@ func TestImportErrors(t *testing.T) {
 
 	for _, test := range errorTests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, _, err := Import(test.input)
+			_, _, _, err := GenDecl(test.input)
 			if err == nil {
 				t.Errorf("expected error for input %q, but got nil", test.input)
 			}
@@ -851,7 +848,7 @@ func FuzzImport(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, src string) {
-		start, end, _, err := Import(src)
+		start, end, _, err := GenDecl(src)
 		if err != nil {
 			t.Skip()
 			return

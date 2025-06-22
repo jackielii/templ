@@ -122,11 +122,10 @@ func HasChanged(previous, updated GeneratorOutput) bool {
 // to the location of the generated Go code in the output.
 func Generate(template *parser.TemplateFile, w io.Writer, opts ...GenerateOpt) (op GeneratorOutput, err error) {
 	g := &generator{
-		tf:             template,
-		w:              NewRangeWriter(w),
-		sourceMap:      parser.NewSourceMap(),
-		symbolResolver: globalSymbolResolver,
-		context:        newGeneratorContext(),
+		tf:        template,
+		w:         NewRangeWriter(w),
+		sourceMap: parser.NewSourceMap(),
+		context:   newGeneratorContext(),
 	}
 	for _, opt := range opts {
 		if err = opt(g); err != nil {
@@ -153,8 +152,6 @@ type generator struct {
 
 	// context tracks the current position in the AST for symbol resolution
 	context *generatorContext
-
-	symbolResolver *symbolResolver
 }
 
 func (g *generator) generate() (err error) {
@@ -479,7 +476,7 @@ func (g *generator) writeTemplate(nodeIdx int, t *parser.HTMLTemplate) error {
 	defer g.context.clearCurrentTemplate()
 
 	// Add template parameters to scope
-	if sig, ok := g.symbolResolver.getLocalTemplate(g.getTemplateName(t)); ok {
+	if sig, ok := globalSymbolResolver.getLocalTemplate(g.getTemplateName(t)); ok {
 		for _, param := range sig.parameters {
 			g.context.addVariable(param.name, &symbolTypeInfo{
 				fullType:     param.typ,
@@ -1725,10 +1722,10 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 
 	// In this block, we want to support { child } expression for templ.Component variables.
 	// Only attempt resolution if symbol resolution is enabled and preprocessing has been done
-	if !g.options.SkipSymbolResolution && g.symbolResolver != nil && g.symbolResolver.depGraph != nil {
+	if !g.options.SkipSymbolResolution {
 		// Try to resolve the expression using context
 		exprValue := strings.TrimSpace(e.Value)
-		typeInfo, err := g.symbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
+		typeInfo, err := globalSymbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
 		if err == nil && typeInfo.isComponent {
 			// This is a component, use call template expression logic
 			return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})

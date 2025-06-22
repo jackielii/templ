@@ -189,7 +189,7 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 		exprValue := strings.TrimSpace(attr.Expression.Value)
 
 		// Try to resolve the expression type using context
-		typeInfo, err := g.symbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
+		typeInfo, err := globalSymbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
 		if err == nil && typeInfo.isComponent {
 			// We know for sure it's a component, pass it directly
 			return exprValue, nil
@@ -486,13 +486,13 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 		}
 	} else {
 		// Register overlay for single file mode including dependencies
-		if err = g.symbolResolver.registerSingleFileWithDependencies(g.tf, g.options.FileName); err != nil {
+		if err = globalSymbolResolver.registerSingleFileWithDependencies(g.tf, g.options.FileName); err != nil {
 			return fmt.Errorf("failed to register template overlay with dependencies: %w", err)
 		}
 
 		// Try to resolve component on-demand
-		currentPkgPath, _ := g.symbolResolver.getPackagePathFromDir(g.currentFileDir())
-		sigs, err = g.symbolResolver.resolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
+		currentPkgPath, _ := globalSymbolResolver.getPackagePathFromDir(g.currentFileDir())
+		sigs, err = globalSymbolResolver.resolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
 		if err != nil {
 			return fmt.Errorf("component %s at %s:%d:%d: %w", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col, err)
 		}

@@ -115,7 +115,6 @@ func TestGoCodeParser(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			input := parse.NewInput(tt.input)
 			an, ok, err := goCode.Parse(input)
@@ -1159,12 +1158,12 @@ func TestGoDeclParsersWithAST(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected ok=true, got false")
 		}
-		
+
 		// Check that AST is populated
 		if got.Expression.Stmt == nil {
 			t.Fatalf("expected Stmt to be populated, got nil")
 		}
-		
+
 		// Verify it's a GenDecl with CONST token
 		genDecl, ok := got.Expression.Stmt.(*ast.GenDecl)
 		if !ok {
@@ -1185,12 +1184,12 @@ func TestGoDeclParsersWithAST(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected ok=true, got false")
 		}
-		
+
 		// Check that AST is populated
 		if got.Expression.Stmt == nil {
 			t.Fatalf("expected Stmt to be populated, got nil")
 		}
-		
+
 		// Verify it's a GenDecl with TYPE token
 		genDecl, ok := got.Expression.Stmt.(*ast.GenDecl)
 		if !ok {
@@ -1211,12 +1210,12 @@ func TestGoDeclParsersWithAST(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected ok=true, got false")
 		}
-		
+
 		// Check that AST is populated
 		if got.Expression.Stmt == nil {
 			t.Fatalf("expected Stmt to be populated, got nil")
 		}
-		
+
 		// Verify it's a GenDecl with VAR token
 		genDecl, ok := got.Expression.Stmt.(*ast.GenDecl)
 		if !ok {
@@ -1237,12 +1236,12 @@ func TestGoDeclParsersWithAST(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected ok=true, got false")
 		}
-		
+
 		// Check that AST is populated
 		if got.Expression.Stmt == nil {
 			t.Fatalf("expected Stmt to be populated, got nil")
 		}
-		
+
 		// Verify it's a FuncDecl
 		funcDecl, ok := got.Expression.Stmt.(*ast.FuncDecl)
 		if !ok {
@@ -1266,12 +1265,12 @@ func TestGoDeclParsersWithAST(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected ok=true, got false")
 		}
-		
+
 		// Check that AST is populated
 		if got.Expression.Stmt == nil {
 			t.Fatalf("expected Stmt to be populated, got nil")
 		}
-		
+
 		// Verify it's a FuncDecl with receiver
 		funcDecl, ok := got.Expression.Stmt.(*ast.FuncDecl)
 		if !ok {

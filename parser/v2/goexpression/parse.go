@@ -198,9 +198,9 @@ func SliceArgs(content string) (expr string, err error) {
 	prefix := "package main\nvar templ_args = []any{"
 	src := prefix + content + "}"
 
-	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	node, err := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
 	if node == nil {
-		return expr, parseErr
+		return expr, err
 	}
 
 	var from, to int
@@ -243,9 +243,9 @@ func FuncSig(content string) (name, expr string, decl *ast.FuncDecl, err error) 
 	prefix := "package main\n"
 	src := prefix + content
 
-	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	node, err := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
 	if node == nil {
-		return name, expr, nil, parseErr
+		return name, expr, nil, err
 	}
 
 	inspectFirstNode(node, func(n ast.Node) bool {
@@ -299,128 +299,24 @@ func Func(content string) (start, end int, stmt any, err error) {
 	return start, end, stmt, nil
 }
 
-func Import(content string) (start, end int, stmt *ast.ImportSpec, err error) {
-	if !strings.HasPrefix(content, "import") {
+// GenDecl parses a GenDecl (import, type, var, const) declaration and returns the AST node.
+func GenDecl(content string) (start, end int, stmt any, err error) {
+	if !strings.HasPrefix(content, "const") && !strings.HasPrefix(content, "type") && 
+		!strings.HasPrefix(content, "var") && !strings.HasPrefix(content, "import") {
 		return 0, 0, nil, ErrExpectedNodeNotFound
 	}
 	prefix := "package main\n"
 	src := prefix + content
 
-	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	node, err := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
 	if node == nil {
-		return 0, 0, nil, parseErr
+		return 0, 0, nil, err
 	}
 
 	var found bool
 	inspectFirstNode(node, func(n ast.Node) bool {
-		spec, ok := n.(*ast.ImportSpec)
+		decl, ok := n.(*ast.GenDecl)
 		if !ok {
-			return true
-		}
-		// Skip "import " which is 7 characters
-		start = min(7, len(content))
-		// Find the end of the import spec by scanning the content
-		end = start
-		inQuotes := false
-		for i := start; i < len(content); i++ {
-			if content[i] == '"' && (i == 0 || content[i-1] != '\\') {
-				inQuotes = !inQuotes
-				if !inQuotes {
-					end = i + 1
-					break
-				}
-			}
-		}
-		stmt = spec
-		found = true
-		return false
-	})
-	if !found {
-		return 0, 0, nil, ErrExpectedNodeNotFound
-	}
-
-	return start, end, stmt, nil
-}
-
-// Const parses a const declaration and returns the AST node.
-func Const(content string) (start, end int, stmt any, err error) {
-	if !strings.HasPrefix(content, "const") {
-		return 0, 0, nil, ErrExpectedNodeNotFound
-	}
-	prefix := "package main\n"
-	src := prefix + content
-
-	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
-	if node == nil {
-		return 0, 0, nil, parseErr
-	}
-
-	var found bool
-	inspectFirstNode(node, func(n ast.Node) bool {
-		decl, ok := n.(*ast.GenDecl)
-		if !ok || decl.Tok != token.CONST {
-			return true
-		}
-		end = int(decl.End()) - len(prefix) - 1
-		stmt = decl
-		found = true
-		return false
-	})
-	if !found {
-		return 0, 0, nil, ErrExpectedNodeNotFound
-	}
-
-	return start, end, stmt, nil
-}
-
-// Type parses a type declaration and returns the AST node.
-func Type(content string) (start, end int, stmt any, err error) {
-	if !strings.HasPrefix(content, "type") {
-		return 0, 0, nil, ErrExpectedNodeNotFound
-	}
-	prefix := "package main\n"
-	src := prefix + content
-
-	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
-	if node == nil {
-		return 0, 0, nil, parseErr
-	}
-
-	var found bool
-	inspectFirstNode(node, func(n ast.Node) bool {
-		decl, ok := n.(*ast.GenDecl)
-		if !ok || decl.Tok != token.TYPE {
-			return true
-		}
-		end = int(decl.End()) - len(prefix) - 1
-		stmt = decl
-		found = true
-		return false
-	})
-	if !found {
-		return 0, 0, nil, ErrExpectedNodeNotFound
-	}
-
-	return start, end, stmt, nil
-}
-
-// Var parses a var declaration and returns the AST node.
-func Var(content string) (start, end int, stmt any, err error) {
-	if !strings.HasPrefix(content, "var") {
-		return 0, 0, nil, ErrExpectedNodeNotFound
-	}
-	prefix := "package main\n"
-	src := prefix + content
-
-	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
-	if node == nil {
-		return 0, 0, nil, parseErr
-	}
-
-	var found bool
-	inspectFirstNode(node, func(n ast.Node) bool {
-		decl, ok := n.(*ast.GenDecl)
-		if !ok || decl.Tok != token.VAR {
 			return true
 		}
 		end = int(decl.End()) - len(prefix) - 1
@@ -472,9 +368,9 @@ func extract[T ast.Stmt](content string, extractor Extractor[T]) (start, end int
 	prefix := "package main\nfunc templ_container() {\n"
 	src := prefix + content
 
-	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	node, err := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
 	if node == nil {
-		return 0, 0, stmt, parseErr
+		return 0, 0, stmt, err
 	}
 
 	var found bool

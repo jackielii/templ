@@ -11,73 +11,6 @@ import (
 // Declaration  = ConstDecl | TypeDecl | VarDecl .
 // TopLevelDecl = Declaration | FunctionDecl | MethodDecl .
 
-var goImportParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
-	start := pi.Position()
-
-	if !peekPrefix(pi, "import ", "import\t", "import(", "import (") {
-		return
-	}
-
-	// Read the first line to check if it's a single-line or multi-line import
-	var firstLine string
-	firstLine, ok, err = stringUntilNewLineOrEOF.Parse(pi)
-	if err != nil || !ok {
-		return
-	}
-
-	// Reset position
-	pi.Seek(start.Index)
-
-	var content string
-	// Check if it's a multi-line import block
-	if strings.Contains(firstLine, "(") {
-		var importContent strings.Builder
-		// Multi-line import block - read until closing parenthesis
-		parenDepth := 0
-		for {
-			peek, ok := pi.Peek(1)
-			if !ok {
-				break
-			}
-
-			char := peek[0]
-			pi.Take(1)
-			importContent.WriteByte(char)
-
-			if char == '(' {
-				parenDepth++
-			} else if char == ')' {
-				parenDepth--
-				if parenDepth == 0 {
-					break
-				}
-			}
-		}
-		content = importContent.String()
-	} else {
-		// Single-line import - just read the line
-		content, _, _ = stringUntilNewLineOrEOF.Parse(pi)
-	}
-
-	// Parse the import to get the AST (validation)
-	_, _, stmt, err := goexpression.Import(content)
-	if err != nil {
-		pi.Seek(start.Index)
-		return nil, false, nil
-	}
-
-	// Create expression
-	end := pi.Position()
-	expr := NewExpression(content, start, end)
-	expr.Stmt = stmt
-
-	n = &TemplateFileGoExpression{
-		Expression: expr,
-	}
-
-	return n, true, nil
-})
-
 var goCommentParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
 	start := pi.Position()
 
@@ -147,17 +80,31 @@ var goCommentParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpress
 	return nil, false, nil
 })
 
-var goFuncDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
-	start := pi.Position()
+var goImportParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
+	if !peekPrefix(pi, "import ", "import\t", "import(", "import (") {
+		return
+	}
 
+	expr, err := parseGo("import", pi, goexpression.GenDecl)
+	if err != nil {
+		return nil, false, err
+	}
+
+	n = &TemplateFileGoExpression{
+		Expression: expr,
+	}
+
+	return n, true, nil
+})
+
+var goFuncDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
 	if !peekPrefix(pi, "func ", "func\t", "func(", "func (") {
 		return
 	}
 
 	expr, err := parseGo("func", pi, goexpression.Func)
 	if err != nil {
-		pi.Seek(start.Index)
-		return nil, false, nil
+		return nil, false, err
 	}
 
 	n = &TemplateFileGoExpression{
@@ -168,17 +115,14 @@ var goFuncDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpres
 })
 
 var goConstDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
-	start := pi.Position()
-
 	if !peekPrefix(pi, "const ", "const\t", "const(", "const (") {
 		return
 	}
 
 	// Use parseGo with the standard approach
-	expr, err := parseGo("const", pi, goexpression.Const)
+	expr, err := parseGo("const", pi, goexpression.GenDecl)
 	if err != nil {
-		pi.Seek(start.Index)
-		return nil, false, nil
+		return nil, false, err
 	}
 
 	// Check for trailing semicolon and consume it if present
@@ -192,16 +136,13 @@ var goConstDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpre
 })
 
 var goTypeDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
-	start := pi.Position()
-
 	if !peekPrefix(pi, "type ", "type\t") {
 		return
 	}
 
-	expr, err := parseGo("type", pi, goexpression.Type)
+	expr, err := parseGo("type", pi, goexpression.GenDecl)
 	if err != nil {
-		pi.Seek(start.Index)
-		return nil, false, nil
+		return nil, false, err
 	}
 
 	// Check for trailing semicolon and consume it if present
@@ -215,28 +156,13 @@ var goTypeDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpres
 })
 
 var goVarDeclParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
-	start := pi.Position()
-
 	if !peekPrefix(pi, "var ", "var\t", "var(", "var (") {
 		return
 	}
 
 	// Use parseGo with a custom extractor that includes the "var" keyword
-	expr, err := parseGo("var", pi, func(content string) (start, end int, stmt any, err error) {
-		_, declEnd, genDecl, err := goexpression.Var(content)
-		if err != nil {
-			return 0, 0, nil, err
-		}
-		// Ensure end doesn't exceed content length
-		if declEnd > len(content) {
-			declEnd = len(content)
-		}
-		// Include the full declaration from the beginning (including "var")
-		return 0, declEnd, genDecl, nil
-	})
+	expr, err := parseGo("var", pi, goexpression.GenDecl)
 	if err != nil {
-		// Reset and let default parser handle it
-		pi.Seek(start.Index)
 		return nil, false, nil
 	}
 
