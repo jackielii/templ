@@ -181,6 +181,7 @@ outer:
 			continue
 		}
 
+		// TODO: (JL) we shouldn't have any remaning nodes at this point: All valid node should have been matched by the above parsers.
 		// Anything that isn't template content is Go code.
 		code := new(strings.Builder)
 		from := pi.Position()
