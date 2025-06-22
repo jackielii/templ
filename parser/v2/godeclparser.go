@@ -87,9 +87,11 @@ func getGoGenDeclParser(keywords ...string) parse.Parser[*TemplateFileGoExpressi
 			return
 		}
 
+		start := pi.Position()
 		expr, err := parseGo(strings.Join(keywords, ","), pi, goexpression.GenDecl)
 		if err != nil {
-			return nil, false, err
+			pi.Seek(start.Index) // Backtrack if parsing fails
+			return nil, false, nil
 		}
 
 		// Check for trailing semicolon and consume it if present
