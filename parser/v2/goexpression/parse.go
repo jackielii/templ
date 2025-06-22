@@ -19,93 +19,93 @@ var (
 
 var defaultRegexp = regexp.MustCompile(`^default\s*:`)
 
-func Case(content string) (start, end int, err error) {
+func Case(content string) (start, end int, stmt any, err error) {
 	if !strings.HasPrefix(content, "case ") && !defaultRegexp.MatchString(content) {
-		return 0, 0, ErrExpectedNodeNotFound
+		return 0, 0, stmt, ErrExpectedNodeNotFound
 	}
 	prefix := "switch {\n"
 	src := prefix + content
-	start, end, err = extract(src, func(body []ast.Stmt) (start, end int, err error) {
+	start, end, stmt, err = extract(src, func(body []ast.Stmt) (start, end int, stmt *ast.CaseClause, err error) {
 		sw, ok := body[0].(*ast.SwitchStmt)
 		if !ok {
-			return 0, 0, ErrExpectedNodeNotFound
+			return 0, 0, stmt, ErrExpectedNodeNotFound
 		}
 		if sw.Body == nil || len(sw.Body.List) == 0 {
-			return 0, 0, ErrExpectedNodeNotFound
+			return 0, 0, stmt, ErrExpectedNodeNotFound
 		}
-		stmt, ok := sw.Body.List[0].(*ast.CaseClause)
+		stmt, ok = sw.Body.List[0].(*ast.CaseClause)
 		if !ok {
-			return 0, 0, ErrExpectedNodeNotFound
+			return 0, 0, stmt, ErrExpectedNodeNotFound
 		}
 		start = int(stmt.Case) - 1
 		end = int(stmt.Colon)
-		return start, end, nil
+		return start, end, stmt, nil
 	})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, stmt, err
 	}
 	// Since we added a `switch {` prefix, we need to remove it.
 	start -= len(prefix)
 	end -= len(prefix)
-	return start, end, nil
+	return start, end, stmt, nil
 }
 
-func If(content string) (start, end int, err error) {
+func If(content string) (start, end int, stmt any, err error) {
 	if !strings.HasPrefix(content, "if") {
-		return 0, 0, ErrExpectedNodeNotFound
+		return 0, 0, nil, ErrExpectedNodeNotFound
 	}
-	return extract(content, func(body []ast.Stmt) (start, end int, err error) {
+	return extract(content, func(body []ast.Stmt) (start, end int, stmt *ast.IfStmt, err error) {
 		stmt, ok := body[0].(*ast.IfStmt)
 		if !ok {
-			return 0, 0, ErrExpectedNodeNotFound
+			return 0, 0, stmt, ErrExpectedNodeNotFound
 		}
 		start = int(stmt.If) + len("if")
 		end = latestEnd(start, stmt.Init, stmt.Cond)
-		return start, end, nil
+		return start, end, stmt, nil
 	})
 }
 
-func For(content string) (start, end int, err error) {
+func For(content string) (start, end int, stmt any, err error) {
 	if !strings.HasPrefix(content, "for") {
-		return 0, 0, ErrExpectedNodeNotFound
+		return 0, 0, nil, ErrExpectedNodeNotFound
 	}
-	return extract(content, func(body []ast.Stmt) (start, end int, err error) {
-		stmt := body[0]
+	return extract(content, func(body []ast.Stmt) (start, end int, stmt ast.Stmt, err error) {
+		stmt = body[0]
 		switch stmt := stmt.(type) {
 		case *ast.ForStmt:
 			start = int(stmt.For) + len("for")
 			end = latestEnd(start, stmt.Init, stmt.Cond, stmt.Post)
-			return start, end, nil
+			return start, end, stmt, nil
 		case *ast.RangeStmt:
 			start = int(stmt.For) + len("for")
 			end = latestEnd(start, stmt.Key, stmt.Value, stmt.X)
-			return start, end, nil
+			return start, end, stmt, nil
 		}
-		return 0, 0, ErrExpectedNodeNotFound
+		return 0, 0, nil, ErrExpectedNodeNotFound
 	})
 }
 
-func Switch(content string) (start, end int, err error) {
+func Switch(content string) (start, end int, stmt any, err error) {
 	if !strings.HasPrefix(content, "switch") {
-		return 0, 0, ErrExpectedNodeNotFound
+		return 0, 0, nil, ErrExpectedNodeNotFound
 	}
-	return extract(content, func(body []ast.Stmt) (start, end int, err error) {
-		stmt := body[0]
+	return extract(content, func(body []ast.Stmt) (start, end int, stmt ast.Stmt, err error) {
+		stmt = body[0]
 		switch stmt := stmt.(type) {
 		case *ast.SwitchStmt:
 			start = int(stmt.Switch) + len("switch")
 			end = latestEnd(start, stmt.Init, stmt.Tag)
-			return start, end, nil
+			return start, end, stmt, nil
 		case *ast.TypeSwitchStmt:
 			start = int(stmt.Switch) + len("switch")
 			end = latestEnd(start, stmt.Init, stmt.Assign)
-			return start, end, nil
+			return start, end, stmt, nil
 		}
-		return 0, 0, ErrExpectedNodeNotFound
+		return 0, 0, nil, ErrExpectedNodeNotFound
 	})
 }
 
-func TemplExpression(src string) (start, end int, err error) {
+func TemplExpression(src string) (start, end int, stmt any, err error) {
 	var s scanner.Scanner
 	fset := token.NewFileSet()
 	file := fset.AddFile("", fset.Base(), len(src))
@@ -124,16 +124,16 @@ func TemplExpression(src string) (start, end int, err error) {
 		pos, tok, lit := s.Scan()
 		stop, err := ep.Insert(pos, tok, lit)
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 		if stop {
 			break
 		}
 	}
-	return 0, ep.End, nil
+	return 0, ep.End, nil, nil
 }
 
-func Expression(src string) (start, end int, err error) {
+func Expression(src string) (start, end int, stmt any, err error) {
 	var s scanner.Scanner
 	fset := token.NewFileSet()
 	file := fset.AddFile("", fset.Base(), len(src))
@@ -186,12 +186,12 @@ loop:
 		case token.COMMENT:
 			end = int(pos) + len(lit) - 1
 		case token.ILLEGAL:
-			return 0, 0, fmt.Errorf("illegal token: %v", lit)
+			return 0, 0, nil, fmt.Errorf("illegal token: %v", lit)
 		default:
 			end = int(pos) + len(tok.String()) - 1
 		}
 	}
-	return start, end, nil
+	return start, end, nil, nil
 }
 
 func SliceArgs(content string) (expr string, err error) {
@@ -234,14 +234,18 @@ func SliceArgs(content string) (expr string, err error) {
 	return src[from:to], err
 }
 
-// Func returns the Go code up to the opening brace of the function body.
-func Func(content string) (name, expr string, err error) {
+// FuncSig returns the Go code up to the opening brace of the function body along with the AST node.
+// It handles both regular functions and methods (functions with receivers).
+func FuncSig(content string) (name, expr string, decl *ast.FuncDecl, err error) {
+	if !strings.HasPrefix(content, "func") {
+		return "", "", nil, ErrExpectedNodeNotFound
+	}
 	prefix := "package main\n"
 	src := prefix + content
 
 	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
 	if node == nil {
-		return name, expr, parseErr
+		return name, expr, nil, parseErr
 	}
 
 	inspectFirstNode(node, func(n ast.Node) bool {
@@ -258,10 +262,73 @@ func Func(content string) (name, expr string, err error) {
 		}
 		expr = strings.Clone(src[start:end])
 		name = fn.Name.Name
+		decl = fn
 		return false
 	})
 
-	return name, expr, err
+	return name, expr, decl, err
+}
+
+func Func(content string) (start, end int, stmt any, err error) {
+	if !strings.HasPrefix(content, "func") {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+	prefix := "package main\n"
+	src := prefix + content
+
+	node, err := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	if node == nil {
+		return 0, 0, nil, err
+	}
+
+	var found bool
+	inspectFirstNode(node, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+		end = int(fn.End()) - 1 - len(prefix)
+		stmt = fn
+		found = true
+		return false
+	})
+	if !found {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+
+	return start, end, stmt, nil
+}
+
+// GenDecl parses a GenDecl (import, type, var, const) declaration and returns the AST node.
+func GenDecl(content string) (start, end int, stmt any, err error) {
+	if !strings.HasPrefix(content, "const") && !strings.HasPrefix(content, "type") &&
+		!strings.HasPrefix(content, "var") && !strings.HasPrefix(content, "import") {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+	prefix := "package main\n"
+	src := prefix + content
+
+	node, err := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	if node == nil {
+		return 0, 0, nil, err
+	}
+
+	var found bool
+	inspectFirstNode(node, func(n ast.Node) bool {
+		decl, ok := n.(*ast.GenDecl)
+		if !ok {
+			return true
+		}
+		end = int(decl.End()) - len(prefix) - 1
+		stmt = decl
+		found = true
+		return false
+	})
+	if !found {
+		return 0, 0, nil, ErrExpectedNodeNotFound
+	}
+
+	return start, end, stmt, nil
 }
 
 func latestEnd(start int, nodes ...ast.Node) (end int) {
@@ -291,19 +358,19 @@ func inspectFirstNode(node ast.Node, f func(ast.Node) bool) {
 	})
 }
 
-// Extract a Go expression from the content.
+// Extractor extracts a Go expression from the content.
 // The Go expression starts at "start" and ends at "end".
 // The reader should skip until "length" to pass over the expression and into the next
 // logical block.
-type Extractor func(body []ast.Stmt) (start, end int, err error)
+type Extractor[T ast.Stmt] func(body []ast.Stmt) (start, end int, stmt T, err error)
 
-func extract(content string, extractor Extractor) (start, end int, err error) {
+func extract[T ast.Stmt](content string, extractor Extractor[T]) (start, end int, stmt T, err error) {
 	prefix := "package main\nfunc templ_container() {\n"
 	src := prefix + content
 
 	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
 	if node == nil {
-		return 0, 0, parseErr
+		return 0, 0, stmt, parseErr
 	}
 
 	var found bool
@@ -322,11 +389,11 @@ func extract(content string, extractor Extractor) (start, end int, err error) {
 			return false
 		}
 		found = true
-		start, end, err = extractor(fn.Body.List)
+		start, end, stmt, err = extractor(fn.Body.List)
 		return false
 	})
 	if !found {
-		return 0, 0, ErrExpectedNodeNotFound
+		return 0, 0, stmt, ErrExpectedNodeNotFound
 	}
 
 	start -= len(prefix)
@@ -339,5 +406,5 @@ func extract(content string, extractor Extractor) (start, end int, err error) {
 		start = end
 	}
 
-	return start, end, err
+	return start, end, stmt, err
 }

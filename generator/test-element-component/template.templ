@@ -1,6 +1,7 @@
 package testelementcomponent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -69,6 +70,17 @@ templ ElementComponent(attrs templ.Attributer) {
 			}
 			enabled?={ isEnabled() }
 		/>
+		<TestNestedComponents
+			content={
+				<span>nested</span>
+			}
+		/>
+		for i := range 0 {
+			<Count i={ i } />
+		}
+		for i := 0; i < 0; i++ {
+			<Count i={ i } />
+		}
 	</div>
 }
 
@@ -129,11 +141,15 @@ templ MultiComponent(title string, count int, enabled bool, visible bool) {
 	</div>
 }
 
-type StructComponent struct{}
+type StructComponent struct {
+	Name    string
+	Child   templ.Component
+	enabled bool
+}
 
-templ (StructComponent) Page(title string, attrs templ.Attributer) {
+templ (s StructComponent) Page(title string, attrs templ.Attributer) {
 	<div { attrs... }>
-		<h1>{ title }</h1>
+		<h1>{ cmp.Or(title, s.Name) }</h1>
 		<p>This is a struct component.</p>
 	</div>
 }
@@ -155,4 +171,26 @@ func shouldShow() (bool, error) {
 
 func strErr() (string, error) {
 	return "str with err", nil
+}
+
+templ Parent() {
+	<div class="parent">
+		{ children... }
+	</div>
+}
+
+templ Child() {
+	<span class="child">Child content</span>
+}
+
+// Test the key functionality: nested components with { child } syntax
+templ TestNestedComponents(content templ.Component) {
+	<Container child={ content } />
+	<Parent>
+		<Child />
+	</Parent>
+}
+
+templ Count(i int) {
+	<span>{ i }</span>
 }

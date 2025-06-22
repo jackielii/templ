@@ -7,7 +7,6 @@ import (
 	"go/format"
 	"go/token"
 	"path"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/imports"
 
-	"github.com/a-h/templ/cmd/templ/generatecmd/modcheck"
 	"github.com/a-h/templ/generator"
 	"github.com/a-h/templ/parser/v2"
 )
@@ -83,15 +81,8 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 	eg.Go(func() (err error) {
 		// Determine the correct working directory for symbol resolution
 		var opts []generator.GenerateOpt
-		if t.Filepath != "" {
-			fileDir := filepath.Dir(t.Filepath)
-			// Check if there's a go.mod file in fileDir or any parent directory
-			if modDir, err := modcheck.WalkUp(fileDir); err == nil {
-				opts = append(opts, generator.WithWorkingDir(modDir))
-			} else {
-				opts = append(opts, generator.WithWorkingDir(fileDir))
-			}
-		}
+		// Skip element component resolution for imports processing
+		opts = append(opts, generator.WithSkipSymbolResolution())
 
 		if _, err := generator.Generate(t, gw, opts...); err != nil {
 			return fmt.Errorf("failed to generate go code: %w", err)

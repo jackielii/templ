@@ -7,6 +7,11 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+var cmpIgnoreExpressionStmt = cmp.Comparer(func(a, b Expression) bool {
+	// TODO: (JL) addin expression.Stmt to the comparison
+	return a.Value == b.Value && a.Range == b.Range
+})
+
 func TestSwitchExpressionParser(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -301,7 +306,6 @@ default:
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			input := parse.NewInput(tt.input)
 			actual, matched, err := switchExpression.Parse(input)
@@ -311,7 +315,7 @@ default:
 			if !matched {
 				t.Fatalf("unexpected failure for input %q", tt.input)
 			}
-			if diff := cmp.Diff(tt.expected, actual); diff != "" {
+			if diff := cmp.Diff(tt.expected, actual, cmpIgnoreExpressionStmt); diff != "" {
 				t.Error(diff)
 			}
 		})

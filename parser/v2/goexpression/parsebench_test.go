@@ -42,7 +42,7 @@ func BenchmarkExpression(b *testing.B) {
 	// Updated...
 	// BenchmarkExpression-10           3942538               279.6 ns/op
 	for n := 0; n < b.N; n++ {
-		start, end, err := Expression(testStringExpression)
+		start, end, _, err := Expression(testStringExpression)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -94,7 +94,7 @@ func BenchmarkTemplExpression(b *testing.B) {
 	// Updated...
 	// BenchmarkTemplExpression-10      1339399               897.6 ns/op
 	for n := 0; n < b.N; n++ {
-		start, end, err := TemplExpression(testTemplExpression)
+		start, end, _, err := TemplExpression(testTemplExpression)
 		if err != nil {
 			b.Fatal(err)
 		}

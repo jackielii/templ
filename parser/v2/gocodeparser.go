@@ -12,8 +12,10 @@ import (
 //
 // The only difference is that goCode normalises whitespace after the
 // closing brace pair, whereas goCodeInJavaScript retains all whitespace.
-var goCode = getGoCodeParser(true)
-var goCodeInJavaScript = getGoCodeParser(false)
+var (
+	goCode             = getGoCodeParser(true)
+	goCodeInJavaScript = getGoCodeParser(false)
+)
 
 func getGoCodeParser(normalizeWhitespace bool) parse.Parser[Node] {
 	return parse.Func(func(pi *parse.Input) (n Node, ok bool, err error) {

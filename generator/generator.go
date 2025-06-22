@@ -59,15 +59,11 @@ func WithSkipCodeGeneratedComment() GenerateOpt {
 	}
 }
 
-// WithWorkingDir sets the working directory for symbol resolution
-func WithWorkingDir(dir string) GenerateOpt {
+// WithSkipSymbolResolution skips element component resolution.
+// This is useful for formatting where component resolution is not needed.
+func WithSkipSymbolResolution() GenerateOpt {
 	return func(g *generator) error {
-		g.symbolResolver = SymbolResolver{
-			cache:      make(map[string]ComponentSignature),
-			workingDir: dir,
-		}
-		g.symbolResolverEnabled = true
-		g.componentSigs = make(ComponentSignatures)
+		g.options.SkipSymbolResolution = true
 		return nil
 	}
 }
@@ -88,6 +84,8 @@ type GeneratorOptions struct {
 	SkipCodeGeneratedComment bool
 	// GeneratedDate to include as a comment.
 	GeneratedDate string
+	// SkipSymbolResolution disables element component resolution (for formatting).
+	SkipSymbolResolution bool
 }
 
 // HasChanged returns true if the generated file should be written to disk, and therefore, also
@@ -124,11 +122,10 @@ func HasChanged(previous, updated GeneratorOutput) bool {
 // to the location of the generated Go code in the output.
 func Generate(template *parser.TemplateFile, w io.Writer, opts ...GenerateOpt) (op GeneratorOutput, err error) {
 	g := &generator{
-		tf:            template,
-		w:             NewRangeWriter(w),
-		sourceMap:     parser.NewSourceMap(),
-		templResolver: make(TemplSignatureResolver),
-		componentSigs: make(ComponentSignatures),
+		tf:        template,
+		w:         NewRangeWriter(w),
+		sourceMap: parser.NewSourceMap(),
+		context:   newGeneratorContext(),
 	}
 	for _, opt := range opts {
 		if err = opt(g); err != nil {
@@ -150,25 +147,14 @@ type generator struct {
 	variableID  int
 	childrenVar string
 
-	options               GeneratorOptions
-	symbolResolver        SymbolResolver
-	symbolResolverEnabled bool
-	templResolver         TemplSignatureResolver
-	componentSigs         ComponentSignatures
-	diagnostics           []parser.Diagnostic
+	options     GeneratorOptions
+	diagnostics []parser.Diagnostic
 
-	// currentTemplate tracks the current Templ block being processed.
-	// This is used to resolve component signatures.
-	currentTemplate *parser.HTMLTemplate
+	// context tracks the current position in the AST for symbol resolution
+	context *generatorContext
 }
 
 func (g *generator) generate() (err error) {
-	g.templResolver.ExtractSignatures(g.tf)
-
-	if err = g.collectAndResolveComponents(); err != nil {
-		return fmt.Errorf("failed to resolve components: %w", err)
-	}
-
 	if err = g.writeCodeGeneratedComment(); err != nil {
 		return
 	}
@@ -194,6 +180,25 @@ func (g *generator) generate() (err error) {
 		return
 	}
 	return err
+}
+
+// currentFileDir returns the directory of the current template file being processed
+func (g *generator) currentFileDir() string {
+	if g.options.FileName != "" {
+		dir := filepath.Dir(g.options.FileName)
+		// Ensure the directory is absolute for symbol resolution
+		if !filepath.IsAbs(dir) {
+			if absDir, err := filepath.Abs(dir); err == nil {
+				return absDir
+			}
+		}
+		return dir
+	}
+	// Return absolute path of current directory
+	if cwd, err := filepath.Abs("."); err == nil {
+		return cwd
+	}
+	return "."
 }
 
 // See https://pkg.go.dev/cmd/go#hdr-Generate_Go_files_by_processing_source
@@ -466,9 +471,25 @@ func (g *generator) writeTemplate(nodeIdx int, t *parser.HTMLTemplate) error {
 		return errors.New("template is nil")
 	}
 
-	prevTemplate := g.currentTemplate
-	g.currentTemplate = t
-	defer func() { g.currentTemplate = prevTemplate }()
+	// Set template in context and add parameters to scope
+	g.context.setCurrentTemplate(t)
+	defer g.context.clearCurrentTemplate()
+
+	// Add template parameters to scope
+	if sig, ok := globalSymbolResolver.getLocalTemplate(g.getTemplateName(t)); ok {
+		for _, param := range sig.parameters {
+			g.context.addVariable(param.name, &symbolTypeInfo{
+				fullType:     param.typ,
+				isComponent:  param.isComponent,
+				isAttributer: param.isAttributer,
+				isPointer:    param.isPointer,
+				isSlice:      param.isSlice,
+				isMap:        param.isMap,
+				isString:     param.isString,
+				isBool:       param.isBool,
+			})
+		}
+	}
 
 	var r parser.Range
 	var tgtSymbolRange parser.Range
@@ -731,6 +752,17 @@ func escapeQuotes(s string) string {
 
 func (g *generator) writeIfExpression(indentLevel int, n *parser.IfExpression, nextNode parser.Node) (err error) {
 	var r parser.Range
+
+	// Push new scope for the if statement
+	g.context.pushScope(n)
+	defer g.context.popScope()
+
+	// Extract and add condition variables to scope
+	condVars := extractIfConditionVariables(n.Expression)
+	for name, typeInfo := range condVars {
+		g.context.addVariable(name, typeInfo)
+	}
+
 	// if
 	if _, err = g.w.WriteIndent(indentLevel, `if `); err != nil {
 		return err
@@ -939,6 +971,17 @@ func (g *generator) writeCallTemplateExpression(indentLevel int, n *parser.CallT
 
 func (g *generator) writeForExpression(indentLevel int, n *parser.ForExpression, next parser.Node) (err error) {
 	var r parser.Range
+
+	// Push new scope for the for loop
+	g.context.pushScope(n)
+	defer g.context.popScope()
+
+	// Extract and add loop variables to scope
+	loopVars := extractForLoopVariables(n.Expression)
+	for name, typeInfo := range loopVars {
+		g.context.addVariable(name, typeInfo)
+	}
+
 	// for
 	if _, err = g.w.WriteIndent(indentLevel, `for `); err != nil {
 		return err
@@ -1678,17 +1721,14 @@ func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) 
 	}
 
 	// In this block, we want to support { child } expression for templ.Component variables.
-	// Which means we only support local block variables, and not global variables.
-	if g.currentTemplate != nil {
-		if templSig, ok := g.templResolver.Get(g.getTemplateName(g.currentTemplate)); ok {
-			// Check if expression value matches a parameter name with templ.Component type
-			exprValue := strings.TrimSpace(e.Value)
-			for _, param := range templSig.Parameters {
-				if param.Name == exprValue && isTemplComponent(param.Type) {
-					// This is a component parameter, use call template expression logic
-					return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})
-				}
-			}
+	// Only attempt resolution if symbol resolution is enabled and preprocessing has been done
+	if !g.options.SkipSymbolResolution {
+		// Try to resolve the expression using context
+		exprValue := strings.TrimSpace(e.Value)
+		typeInfo, err := globalSymbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
+		if err == nil && typeInfo.isComponent {
+			// This is a component, use call template expression logic
+			return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})
 		}
 	}
 

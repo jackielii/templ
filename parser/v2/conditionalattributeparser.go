@@ -23,7 +23,7 @@ func (conditionalAttributeParser) Parse(pi *parse.Input) (r *ConditionalAttribut
 
 	// Parse the Go if expression.
 	r = &ConditionalAttribute{}
-	if r.Expression, err = parseGo("if attribute", pi, goexpression.If); err != nil {
+	if r.Expression, err = parseGo("if", pi, goexpression.If); err != nil {
 		return
 	}
 
@@ -80,7 +80,7 @@ func (attributeElseExpressionParser) Parse(in *parse.Input) (r []Attribute, ok b
 	_, _, _ = parse.OptionalWhitespace.Parse(in)
 
 	// } else {
-	var endElseParser = parse.All(
+	endElseParser := parse.All(
 		parse.Rune('}'),
 		parse.OptionalWhitespace,
 		parse.String("else"),

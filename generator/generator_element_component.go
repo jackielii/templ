@@ -2,10 +2,9 @@ package generator
 
 import (
 	"fmt"
-	goparser "go/parser"
-	"go/token"
 	"slices"
 	"strings"
+	"unicode"
 
 	_ "embed"
 
@@ -78,19 +77,19 @@ func (g *generator) writeBlockElementComponent(indentLevel int, n *parser.Elemen
 type elementComponentAttributes struct {
 	keys      []parser.ConstantAttributeKey
 	attrs     []parser.Attribute
-	params    []ParameterInfo
+	params    []parameterInfo
 	restAttrs []parser.Attribute
-	restParam ParameterInfo
+	restParam parameterInfo
 }
 
-func (g *generator) writeElementComponentAttrVars(indentLevel int, sigs ComponentSignature, n *parser.ElementComponent) ([]string, error) {
+func (g *generator) writeElementComponentAttrVars(indentLevel int, sigs componentSignature, n *parser.ElementComponent) ([]string, error) {
 	orderedAttrs, err := g.reorderElementComponentAttributes(sigs, n)
 	if err != nil {
 		return nil, err
 	}
 
 	var restVarName string
-	if orderedAttrs.restParam.Name != "" {
+	if orderedAttrs.restParam.name != "" {
 		restVarName = g.createVariableName()
 		if _, err = g.w.WriteIndent(indentLevel, "var "+restVarName+" = templ.OrderedAttributes{}\n"); err != nil {
 			return nil, err
@@ -107,8 +106,7 @@ func (g *generator) writeElementComponentAttrVars(indentLevel int, sigs Componen
 		res[i] = value
 	}
 
-	if orderedAttrs.restParam.Name != "" {
-		// spew.Dump(orderedAttrs.restParam, orderedAttrs.restAttrs)
+	if orderedAttrs.restParam.name != "" {
 		for _, attr := range orderedAttrs.restAttrs {
 			_ = g.writeElementComponentArgRestVar(indentLevel, restVarName, attr)
 		}
@@ -117,30 +115,40 @@ func (g *generator) writeElementComponentAttrVars(indentLevel int, sigs Componen
 	return res, nil
 }
 
-func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n *parser.ElementComponent) (elementComponentAttributes, error) {
+func (g *generator) reorderElementComponentAttributes(sig componentSignature, n *parser.ElementComponent) (elementComponentAttributes, error) {
 	rest := make([]parser.Attribute, 0)
 	attrMap := make(map[string]parser.Attribute)
 	keyMap := make(map[string]parser.ConstantAttributeKey)
+
+	// Debug: reorderElementComponentAttributes for %s with %d attributes
+
 	for _, attr := range n.Attributes {
 		keyed, ok := attr.(parser.KeyedAttribute)
 		if ok {
 			key, ok := keyed.AttributeKey().(parser.ConstantAttributeKey)
 			if ok {
-				if slices.ContainsFunc(sig.Parameters, func(p ParameterInfo) bool { return p.Name == key.Name }) {
+				// Debug: Attribute key: %s
+				if slices.ContainsFunc(sig.parameters, func(p parameterInfo) bool { return p.name == key.Name }) {
 					// Element component should only works with const key element.
 					attrMap[key.Name] = attr
 					keyMap[key.Name] = key
 					continue
+				} else {
+					// Debug: Not found in parameters
 				}
+			} else {
+				// Debug: Attribute key is not constant
 			}
+		} else {
+			// Debug: Attribute is not keyed
 		}
 		rest = append(rest, attr)
 	}
 
-	params := sig.Parameters
+	params := sig.parameters
 	// We support an optional last parameter that is of type templ.Attributer.
-	var attrParam ParameterInfo
-	if len(params) > 0 && isTemplAttributer(params[len(params)-1].Type) {
+	var attrParam parameterInfo
+	if len(params) > 0 && params[len(params)-1].isAttributer {
 		attrParam = params[len(params)-1]
 		params = params[:len(params)-1]
 	}
@@ -148,17 +156,22 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 	keys := make([]parser.ConstantAttributeKey, len(params))
 	for i, param := range params {
 		var ok bool
-		ordered[i], ok = attrMap[param.Name]
+		ordered[i], ok = attrMap[param.name]
 		if !ok {
-			return elementComponentAttributes{}, fmt.Errorf("missing required attribute %s for component %s", param.Name, n.Name)
+			// Debug: print what attributes we have
+			var attrNames []string
+			for k := range attrMap {
+				attrNames = append(attrNames, k)
+			}
+			return elementComponentAttributes{}, fmt.Errorf("missing required attribute %s for component %s (available: %v)", param.name, n.Name, attrNames)
 		}
-		keys[i], ok = keyMap[param.Name]
+		keys[i], ok = keyMap[param.name]
 		if !ok {
-			return elementComponentAttributes{}, fmt.Errorf("missing required key for attribute %s in component %s", param.Name, n.Name)
+			return elementComponentAttributes{}, fmt.Errorf("missing required key for attribute %s in component %s", param.name, n.Name)
 		}
 	}
 	return elementComponentAttributes{
-		params:    sig.Parameters,
+		params:    params, // Use params without the attrs parameter
 		attrs:     ordered,
 		keys:      keys,
 		restAttrs: rest,
@@ -166,11 +179,31 @@ func (g *generator) reorderElementComponentAttributes(sig ComponentSignature, n 
 	}, nil
 }
 
-func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr parser.Attribute, param ParameterInfo) (varName string, err error) {
+func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr parser.Attribute, param parameterInfo) (varName string, err error) {
 	switch attr := attr.(type) {
 	case *parser.InlineComponentAttribute:
 		return g.writeChildrenComponent(indentLevel, attr.Children)
 	case *parser.ExpressionAttribute:
+		// For expression attributes with component parameters, we need to determine
+		// if the expression itself evaluates to a component or needs wrapping
+		exprValue := strings.TrimSpace(attr.Expression.Value)
+
+		// Try to resolve the expression type using context
+		typeInfo, err := globalSymbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
+		if err == nil && typeInfo.isComponent {
+			// We know for sure it's a component, pass it directly
+			return exprValue, nil
+		}
+
+		// If we can't resolve or it's not a component, check if it's a simple identifier
+		// that might be a component (backward compatibility)
+		if isValidIdentifier(exprValue) {
+			// For simple identifiers, we'll pass them through and let runtime handle it
+			return exprValue, nil
+		}
+
+		// Otherwise, handle as a potentially error-returning expression
+		// The expression might return (Component, error) or (string, error) or other types
 		varName = g.createVariableName()
 		var r parser.Range
 		if _, err = g.w.WriteIndent(indentLevel, varName+", templ_7745c5c3_Err := templ.JoinAnyErrs("); err != nil {
@@ -186,8 +219,33 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 		if err = g.writeExpressionErrorHandler(indentLevel, attr.Expression); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("templ.Stringable(%s)", varName), nil
+
+		// Create a component wrapper that handles both component and non-component values
+		// Use type assertion to check if the value is already a component
+		wrapperName := g.createVariableName()
+		if _, err = g.w.WriteIndent(indentLevel, fmt.Sprintf("var %s templ.Component\n", wrapperName)); err != nil {
+			return "", err
+		}
+		if _, err = g.w.WriteIndent(indentLevel, fmt.Sprintf("if comp, ok := any(%s).(templ.Component); ok {\n", varName)); err != nil {
+			return "", err
+		}
+		if _, err = g.w.WriteIndent(indentLevel+1, fmt.Sprintf("%s = comp\n", wrapperName)); err != nil {
+			return "", err
+		}
+		if _, err = g.w.WriteIndent(indentLevel, "} else {\n"); err != nil {
+			return "", err
+		}
+		if _, err = g.w.WriteIndent(indentLevel+1, fmt.Sprintf("%s = templ.Stringable(fmt.Sprint(%s))\n", wrapperName, varName)); err != nil {
+			return "", err
+		}
+		if _, err = g.w.WriteIndent(indentLevel, "}\n"); err != nil {
+			return "", err
+		}
+
+		return wrapperName, nil
+
 	case *parser.ConstantAttribute:
+		// String constants need to be wrapped in Stringable for component parameters
 		value := `"` + attr.Value + `"`
 		if attr.SingleQuote {
 			value = `'` + attr.Value + `'`
@@ -202,8 +260,8 @@ func (g *generator) writeElementComponentAttrComponent(indentLevel int, attr par
 	}
 }
 
-func (g *generator) writeElementComponentArgNewVar(indentLevel int, attr parser.Attribute, param ParameterInfo) (string, error) {
-	if isTemplComponent(param.Type) {
+func (g *generator) writeElementComponentArgNewVar(indentLevel int, attr parser.Attribute, param parameterInfo) (string, error) {
+	if param.isComponent {
 		return g.writeElementComponentAttrComponent(indentLevel, attr, param)
 	}
 
@@ -416,9 +474,29 @@ func (g *generator) writeRestAppend(indentLevel int, restVarName string, key str
 }
 
 func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser.ElementComponent) (err error) {
-	sigs, ok := g.componentSigs.Get(n.Name)
-	if !ok {
-		return fmt.Errorf("component %s signature not found at %s:%d:%d", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col)
+	var sigs componentSignature
+
+	if g.options.SkipSymbolResolution {
+		// For formatting, create a dummy signature that allows generation to proceed
+		sigs = componentSignature{
+			name:          n.Name,
+			qualifiedName: n.Name,
+			isStruct:      false,             // Treat as function for simplicity
+			parameters:    []parameterInfo{}, // Empty parameters
+		}
+	} else {
+		// Register overlay for single file mode including dependencies
+		if err = globalSymbolResolver.registerSingleFileWithDependencies(g.tf, g.options.FileName); err != nil {
+			return fmt.Errorf("failed to register template overlay with dependencies: %w", err)
+		}
+
+		// Try to resolve component on-demand
+		currentPkgPath, _ := globalSymbolResolver.getPackagePathFromDir(g.currentFileDir())
+		sigs, err = globalSymbolResolver.resolveElementComponent(g.currentFileDir(), currentPkgPath, n.Name, g.tf)
+		if err != nil {
+			return fmt.Errorf("component %s at %s:%d:%d: %w", n.Name, g.options.FileName, n.Range.From.Line, n.Range.From.Col, err)
+		}
+		// Debug: Component %s has %d parameters
 	}
 
 	var vars []string
@@ -433,13 +511,13 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 	var r parser.Range
 
 	// For types that implement Component, use appropriate struct literal syntax
-	if sigs.IsStruct {
+	if sigs.isStruct {
 		// (ComponentType{Field1: value1, Field2: value2}) or (&ComponentType{...})
 		if _, err = g.w.Write("("); err != nil {
 			return err
 		}
 
-		if sigs.IsPointerRecv {
+		if sigs.isPointerRecv {
 			if _, err = g.w.Write("&"); err != nil {
 				return err
 			}
@@ -461,8 +539,8 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 				}
 			}
 			// Write field name: value
-			if i < len(sigs.Parameters) {
-				if _, err = g.w.Write(sigs.Parameters[i].Name); err != nil {
+			if i < len(sigs.parameters) {
+				if _, err = g.w.Write(sigs.parameters[i].name); err != nil {
 					return err
 				}
 				if _, err = g.w.Write(": "); err != nil {
@@ -509,311 +587,21 @@ func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser
 	return nil
 }
 
-// tryResolveStructMethod attempts to resolve struct method components like structComp.Page to StructComponent.Page
-func (g *generator) tryResolveStructMethod(componentName string) bool {
-	parts := strings.Split(componentName, ".")
-	if len(parts) < 2 {
+// isValidIdentifier checks if a string is a valid Go identifier
+func isValidIdentifier(s string) bool {
+	if s == "" {
 		return false
 	}
-
-	varName := parts[0]
-	methodName := strings.Join(parts[1:], ".")
-
-	// Look through the template file for variable declarations
-	for _, node := range g.tf.Nodes {
-		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
-			// Check if this contains variable declarations
-			if g.containsVariableDeclaration(goExpr.Expression.Value, varName) {
-				typeName := g.extractVariableType(goExpr.Expression.Value, varName)
-				if typeName != "" {
-					// Look for signature with TypeName.MethodName
-					candidateSig := typeName + "." + methodName
-					if _, ok := g.templResolver.Get(candidateSig); ok {
-						// Add alias mapping for future lookups
-						g.templResolver.AddAlias(componentName, candidateSig)
-						return true
-					}
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-// containsVariableDeclaration checks if the Go code contains a variable declaration
-func (g *generator) containsVariableDeclaration(goCode, varName string) bool {
-	// Simple pattern matching for "var varName" or "varName :="
-	patterns := []string{
-		"var " + varName + " ",
-		varName + " :=",
-		varName + " =",
-	}
-
-	for _, pattern := range patterns {
-		if strings.Contains(goCode, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-// extractVariableType extracts the type from a variable declaration
-func (g *generator) extractVariableType(goCode, varName string) string {
-	lines := strings.Split(goCode, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		// Handle "var varName TypeName"
-		if strings.HasPrefix(line, "var "+varName+" ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 3 {
-				return parts[2]
-			}
-		}
-
-		// Handle "varName := TypeName{}" or "varName = TypeName{}"
-		if strings.Contains(line, varName+" :=") || strings.Contains(line, varName+" =") {
-			// Extract type from constructor call like "StructComponent{}"
-			if idx := strings.Index(line, "{"); idx != -1 {
-				beforeBrace := line[:idx]
-				parts := strings.Fields(beforeBrace)
-				if len(parts) >= 3 {
-					return parts[len(parts)-1]
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
-func (g *generator) resolveImportPath(packageAlias string) string {
-	fset := token.NewFileSet()
-
-	// Look through the template file's imports to find the import path for this alias
-	for _, node := range g.tf.Nodes {
-		if importNode, ok := node.(*parser.TemplateFileGoExpression); ok {
-			// Check if this contains import statements
-			if strings.Contains(importNode.Expression.Value, "import") {
-				path := g.parseImportPathWithAST(importNode.Expression.Value, packageAlias, fset)
-				if path != "" {
-					return path
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// parseImportPathWithAST extracts the import path for a specific alias using Go AST parser
-func (g *generator) parseImportPathWithAST(goCode, packageAlias string, fset *token.FileSet) string {
-	// Try to parse as a complete Go file first
-	fullGoCode := "package main\n" + goCode
-
-	astFile, err := goparser.ParseFile(fset, "", fullGoCode, goparser.ImportsOnly)
-	if err != nil {
-		// If that fails, try parsing just the import block
-		if strings.Contains(goCode, "import (") {
-			// Extract just the import block
-			start := strings.Index(goCode, "import (")
-			if start != -1 {
-				end := strings.Index(goCode[start:], ")")
-				if end != -1 {
-					importBlock := goCode[start : start+end+1]
-					fullGoCode = "package main\n" + importBlock
-					astFile, err = goparser.ParseFile(fset, "", fullGoCode, goparser.ImportsOnly)
-				}
-			}
-		}
-
-		if err != nil {
-			// Fall back to simple string parsing for edge cases
-			return g.parseImportPathFallback(goCode, packageAlias)
-		}
-	}
-
-	// Extract import path for the specific alias from AST
-	for _, imp := range astFile.Imports {
-		if imp.Path != nil {
-			pkgPath := strings.Trim(imp.Path.Value, `"`)
-			var alias string
-
-			if imp.Name != nil {
-				// Explicit alias: import alias "path"
-				alias = imp.Name.Name
-			} else {
-				// No explicit alias: import "path" -> derive alias from path
-				if lastSlash := strings.LastIndex(pkgPath, "/"); lastSlash != -1 {
-					alias = pkgPath[lastSlash+1:]
-				}
-			}
-
-			if alias == packageAlias {
-				return pkgPath
-			}
-		}
-	}
-
-	return ""
-}
-
-// parseImportPathFallback provides fallback parsing for edge cases
-func (g *generator) parseImportPathFallback(goCode, packageAlias string) string {
-	lines := strings.Split(goCode, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "import ") {
-			// Remove "import " prefix
-			importPart := strings.TrimSpace(line[7:])
-
-			// Handle quoted import without alias
-			if strings.HasPrefix(importPart, `"`) && strings.HasSuffix(importPart, `"`) {
-				// import "github.com/pkg/name" -> alias is "name"
-				pkgPath := importPart[1 : len(importPart)-1]
-				if lastSlash := strings.LastIndex(pkgPath, "/"); lastSlash != -1 {
-					alias := pkgPath[lastSlash+1:]
-					if alias == packageAlias {
-						return pkgPath
-					}
-				}
-			} else {
-				// Handle import with explicit alias
-				// alias "package" or . "package"
-				parts := strings.Fields(importPart)
-				if len(parts) >= 2 {
-					alias := parts[0]
-					if alias == packageAlias {
-						return strings.Trim(parts[1], `"`)
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func (g *generator) collectAndResolveComponents() error {
-	collector := NewElementComponentCollector()
-	_ = collector.Collect(g.tf)
-
-	uniqueComponents := collector.GetUniqueComponents()
-
-	if len(uniqueComponents) == 0 {
-		return nil
-	}
-
-	for _, comp := range uniqueComponents {
-		var sig ComponentSignature
-		var err error
-		var found bool
-
-		if comp.PackageName == "" {
-			// Local component - check both simple name and full name for receiver methods
-			if templSig, ok := g.templResolver.Get(comp.Name); ok {
-				sig = templSig
-				found = true
-			} else {
-				// If this looks like a struct method (var.Method), try to resolve it
-				if strings.Contains(comp.Name, ".") {
-					found = g.tryResolveStructMethod(comp.Name)
-					if found {
-						// Find the resolved signature
-						if templSig, ok := g.templResolver.Get(comp.Name); ok {
-							sig = templSig
-						}
-					}
-				}
-
-				if !found && g.symbolResolverEnabled {
-					// Try Go function resolution
-					sig, err = (&g.symbolResolver).ResolveLocalComponent(comp.Name, comp.Position, g.options.FileName)
-					if err == nil {
-						found = true
-					}
-				}
+	for i, r := range s {
+		if i == 0 {
+			if !unicode.IsLetter(r) && r != '_' {
+				return false
 			}
 		} else {
-			// Package import - use Go function resolution with resolved import path
-			if g.symbolResolverEnabled {
-				importPath := g.resolveImportPath(comp.PackageName)
-				if importPath != "" {
-					sig, err = (&g.symbolResolver).ResolveComponentWithPosition(importPath, comp.Name, comp.Position, g.options.FileName)
-					if err == nil {
-						found = true
-					}
-				}
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+				return false
 			}
 		}
-
-		if !found {
-			var message string
-			if err != nil {
-				if comp.PackageName != "" {
-					message = fmt.Sprintf("Component %s.%s: %v", comp.PackageName, comp.Name, err)
-				} else {
-					message = fmt.Sprintf("Component %s: %v", comp.Name, err)
-				}
-			} else {
-				if comp.PackageName != "" {
-					message = fmt.Sprintf("Component %s.%s not found in templ templates or Go functions", comp.PackageName, comp.Name)
-				} else {
-					message = fmt.Sprintf("Component %s not found in templ templates or Go functions", comp.Name)
-				}
-			}
-
-			// Add diagnostic for this missing component
-			g.addComponentDiagnostic(comp, message)
-			continue
-		}
-
-		// Store the signature for use during code generation
-		key := comp.Name
-		if comp.PackageName != "" {
-			key = comp.PackageName + "." + comp.Name
-		}
-		sig.QualifiedName = key
-		g.componentSigs.Add(sig)
 	}
-
-	// Don't return an error if no component signatures are resolved
-	// Instead, let the diagnostics be reported to the LSP
-	// The code generation will handle missing components gracefully
-	// if len(g.componentSigs) == 0 && len(uniqueComponents) > 0 {
-	// }
-
-	return nil
-}
-
-// addComponentDiagnostic adds a diagnostic for component resolution issues
-func (g *generator) addComponentDiagnostic(comp ComponentReference, message string) {
-	// Create a Range from the component's position
-	// ComponentReference.Position is the start position of the component name
-	nameStart := comp.Position
-	nameLength := int64(len(comp.Name))
-	nameEnd := parser.Position{
-		Index: nameStart.Index + nameLength,
-		Line:  nameStart.Line,
-		Col:   nameStart.Col + uint32(len(comp.Name)),
-	}
-
-	g.diagnostics = append(g.diagnostics, parser.Diagnostic{
-		Message: message,
-		Range: parser.Range{
-			From: nameStart,
-			To:   nameEnd,
-		},
-	})
-}
-
-func isTemplAttributer(typ string) bool {
-	// TODO: better handling of the types:
-	// when the type comes from templ file, it will be "templ.Attributer"
-	// when it comes from a Go file which uses the x/tool/packages parser the moment, it will be "github.com/a-h/templ.Attributer"
-	// This is not ideal but a ok compromise. when the symbols is from templ files, it may not have been resolved, only parsed. And resolving takes time and may nto be available.
-	return typ == "templ.Attributer" || typ == "github.com/a-h/templ.Attributer"
-}
-
-func isTemplComponent(typ string) bool {
-	return typ == "templ.Component" || typ == "github.com/a-h/templ.Component"
+	return true
 }

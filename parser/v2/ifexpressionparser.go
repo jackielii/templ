@@ -86,7 +86,7 @@ func (elseIfExpressionParser) Parse(pi *parse.Input) (r ElseIfExpression, matche
 	// Rewind to the start of the `if` statement.
 	pi.Seek(pi.Index() - 2)
 	// Parse the Go if expression.
-	if r.Expression, err = parseGo("else if", pi, goexpression.If); err != nil {
+	if r.Expression, err = parseGo("if", pi, goexpression.If); err != nil {
 		return r, false, err
 	}
 

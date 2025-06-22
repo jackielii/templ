@@ -50,7 +50,7 @@ func FuzzIf(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, src string) {
-		start, end, err := If(src)
+		start, end, _, err := If(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -119,7 +119,7 @@ func FuzzFor(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, src string) {
-		start, end, err := For(src)
+		start, end, _, err := For(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -175,7 +175,7 @@ func FuzzSwitch(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, s string) {
 		src := "switch " + s
-		start, end, err := For(src)
+		start, end, _, err := For(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -237,7 +237,7 @@ func FuzzCaseStandard(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, src string) {
-		start, end, err := Case(src)
+		start, end, _, err := Case(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -285,7 +285,7 @@ func FuzzCaseDefault(f *testing.F) {
 		f.Add("default:" + suffix)
 	}
 	f.Fuzz(func(t *testing.T, src string) {
-		start, end, err := Case(src)
+		start, end, _, err := Case(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -537,7 +537,7 @@ func FuzzTemplExpression(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, s string) {
 		src := "switch " + s
-		start, end, err := TemplExpression(src)
+		start, end, _, err := TemplExpression(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -560,7 +560,7 @@ func FuzzExpression(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, s string) {
 		src := "switch " + s
-		start, end, err := Expression(src)
+		start, end, _, err := Expression(src)
 		if err != nil {
 			t.Skip()
 			return
@@ -718,7 +718,7 @@ func FuzzFuncs(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		_, _, err := Func(s)
+		_, _, _, err := FuncSig(s)
 		if err != nil {
 			t.Skip()
 			return
@@ -737,7 +737,7 @@ func TestFunc(t *testing.T) {
 	for _, test := range funcTests {
 		for i, suffix := range suffixes {
 			t.Run(fmt.Sprintf("%s_%d", test.name, i), func(t *testing.T) {
-				name, expr, err := Func(prefix + test.input + suffix)
+				name, expr, _, err := FuncSig(prefix + test.input + suffix)
 				if err != nil {
 					t.Errorf("failed to parse slice args: %v", err)
 				}
@@ -752,18 +752,123 @@ func TestFunc(t *testing.T) {
 	}
 }
 
+var importTests = []testInput{
+	{
+		name:  "basic import",
+		input: `import "fmt"`,
+	},
+	{
+		name:  "import with alias",
+		input: `import f "fmt"`,
+	},
+	{
+		name:  "import with dot",
+		input: `import . "fmt"`,
+	},
+	{
+		name:  "import with underscore",
+		input: `import _ "fmt"`,
+	},
+	{
+		name:  "import with path",
+		input: `import "github.com/a-h/templ"`,
+	},
+	{
+		name:  "import with alias and path",
+		input: `import templ "github.com/a-h/templ"`,
+	},
+	{
+		name:  "import with escaped quotes",
+		input: `import "github.com/test/\"quoted\""`,
+	},
+	{
+		name:  "import with spaces",
+		input: `import   "fmt"`,
+	},
+	{
+		name:  "import with alias and spaces",
+		input: `import   myalias   "fmt"`,
+	},
+}
+
+func TestImport(t *testing.T) {
+	prefix := ""
+	suffixes := []string{
+		"",
+		"\n",
+		"\nvar x = 1",
+		"\n\nfunc main() {}",
+	}
+	for _, test := range importTests {
+		for i, suffix := range suffixes {
+			t.Run(fmt.Sprintf("%s_%d", test.name, i), run(test, prefix, suffix, GenDecl))
+		}
+	}
+}
+
+func TestImportErrors(t *testing.T) {
+	errorTests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "not an import",
+			input: `func main() {}`,
+		},
+		{
+			name:  "starts with if",
+			input: `if true {}`,
+		},
+		{
+			name:  "empty string",
+			input: ``,
+		},
+	}
+
+	for _, test := range errorTests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, err := GenDecl(test.input)
+			if err == nil {
+				t.Errorf("expected error for input %q, but got nil", test.input)
+			}
+		})
+	}
+}
+
+func FuzzImport(f *testing.F) {
+	suffixes := []string{
+		"",
+		"\n",
+		"\nvar x = 1",
+		"\n\nfunc main() {}",
+	}
+	for _, test := range importTests {
+		for _, suffix := range suffixes {
+			f.Add("import " + test.input + suffix)
+		}
+	}
+	f.Fuzz(func(t *testing.T, src string) {
+		start, end, _, err := GenDecl(src)
+		if err != nil {
+			t.Skip()
+			return
+		}
+		panicIfInvalid(src, start, end)
+	})
+}
+
 type testInput struct {
 	name        string
 	input       string
 	expectedErr error
 }
 
-type extractor func(content string) (start, end int, err error)
+type extractor func(content string) (start, end int, stmt any, err error)
 
 func run(test testInput, prefix, suffix string, e extractor) func(t *testing.T) {
 	return func(t *testing.T) {
 		src := prefix + test.input + suffix
-		start, end, err := e(src)
+		start, end, _, err := e(src)
 		if test.expectedErr == nil && err != nil {
 			t.Fatalf("expected nil error got error type %T: %v", err, err)
 		}

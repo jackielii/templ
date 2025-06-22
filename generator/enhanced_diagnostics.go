@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/a-h/templ/parser/v2"
@@ -33,8 +34,8 @@ import (
 // 4. Different dependency requirements (minimal vs full toolchain)
 
 // DiagnoseWithSymbolResolution performs diagnostics with Go type information
-// This is more comprehensive than parser.Diagnose() but requires a working directory for package loading
-func DiagnoseWithSymbolResolution(t *parser.TemplateFile, workingDir string) ([]parser.Diagnostic, error) {
+// This is more comprehensive than parser.Diagnose() and automatically detects the working directory
+func DiagnoseWithSymbolResolution(t *parser.TemplateFile) ([]parser.Diagnostic, error) {
 	// Run standard diagnostics first
 	standardDiags, err := parser.Diagnose(t)
 	if err != nil {
@@ -50,7 +51,7 @@ func DiagnoseWithSymbolResolution(t *parser.TemplateFile, workingDir string) ([]
 	}
 
 	// Add enhanced missing component diagnostics
-	enhancedDiags, err := enhancedMissingComponentDiagnoser(t, workingDir)
+	enhancedDiags, err := enhancedMissingComponentDiagnoser(t)
 	if err != nil {
 		// If enhanced diagnostics fail, fall back to standard ones
 		return standardDiags, nil
@@ -60,7 +61,7 @@ func DiagnoseWithSymbolResolution(t *parser.TemplateFile, workingDir string) ([]
 }
 
 // enhancedMissingComponentDiagnoser checks for missing components using Go type information
-func enhancedMissingComponentDiagnoser(t *parser.TemplateFile, workingDir string) ([]parser.Diagnostic, error) {
+func enhancedMissingComponentDiagnoser(t *parser.TemplateFile) ([]parser.Diagnostic, error) {
 	var diags []parser.Diagnostic
 
 	// Collect all component references
@@ -70,7 +71,8 @@ func enhancedMissingComponentDiagnoser(t *parser.TemplateFile, workingDir string
 	definedComponents := collectDefinedComponents(t)
 
 	// Create symbol resolver
-	resolver := NewSymbolResolver(workingDir)
+	// resolver := newSymbolResolver()
+	resolver := globalSymbolResolver
 
 	// Check each component reference
 	for _, ref := range componentRefs {
@@ -86,7 +88,12 @@ func enhancedMissingComponentDiagnoser(t *parser.TemplateFile, workingDir string
 		}
 
 		// Try to resolve as a Go type implementing templ.Component
-		_, err := resolver.ResolveLocalComponent(ref.Name, parser.Position{}, "")
+		// Use template file directory as starting point for module detection
+		fileDir := "."
+		if t.Filepath != "" {
+			fileDir = filepath.Dir(t.Filepath)
+		}
+		_, err := resolver.resolveComponent(fileDir, "", ref.Name)
 		if err != nil {
 			// Component not found - add diagnostic
 			diags = append(diags, parser.Diagnostic{

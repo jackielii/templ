@@ -645,7 +645,6 @@ if test {` + " " + `
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			input := parse.NewInput(tt.input)
 			result, matched, err := tt.parser.Parse(input)
@@ -655,7 +654,7 @@ if test {` + " " + `
 			if !matched {
 				t.Errorf("failed to parse at %v", input.Position())
 			}
-			if diff := cmp.Diff(tt.expected, result); diff != "" {
+			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt); diff != "" {
 				t.Error(diff)
 			}
 		})
@@ -1839,7 +1838,7 @@ func TestElementParser(t *testing.T) {
 			if !matched {
 				t.Fatalf("failed to parse at %d", input.Index())
 			}
-			if diff := cmp.Diff(tt.expected, result); diff != "" {
+			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt); diff != "" {
 				t.Error(diff)
 			}
 		})
@@ -1898,7 +1897,7 @@ func TestElementParserErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			input := parse.NewInput(tt.input)
 			_, _, err := element.Parse(input)
-			if diff := cmp.Diff(tt.expected, err); diff != "" {
+			if diff := cmp.Diff(tt.expected, err, cmpIgnoreExpressionStmt); diff != "" {
 				t.Error(diff)
 			}
 		})

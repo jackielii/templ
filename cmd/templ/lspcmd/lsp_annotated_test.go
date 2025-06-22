@@ -56,9 +56,11 @@ func testAnnotatedMessageFile(t *testing.T, filePath string) {
 		t.Fatalf("Failed to parse template from %s: %v", filePath, err)
 	}
 
+	// Set the file path for proper module resolution
+	tf.Filepath = filePath
+
 	// Run enhanced diagnostics that can find Go types implementing templ.Component
-	workingDir := ".testdata" // Use testdata directory as working directory
-	actualDiagnostics, err := generator.DiagnoseWithSymbolResolution(tf, workingDir)
+	actualDiagnostics, err := generator.DiagnoseWithSymbolResolution(tf)
 	if err != nil {
 		t.Fatalf("DiagnoseWithSymbolResolution() failed for %s: %v", filePath, err)
 	}

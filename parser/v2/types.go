@@ -116,6 +116,7 @@ func (r Range) String() string {
 type Expression struct {
 	Value string
 	Range Range
+	Stmt  any // The AST node for the expression, if available.
 }
 
 type TemplateFile struct {
