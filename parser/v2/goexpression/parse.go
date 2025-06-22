@@ -243,9 +243,9 @@ func FuncSig(content string) (name, expr string, decl *ast.FuncDecl, err error) 
 	prefix := "package main\n"
 	src := prefix + content
 
-	node, err := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
 	if node == nil {
-		return name, expr, nil, err
+		return name, expr, nil, parseErr
 	}
 
 	inspectFirstNode(node, func(n ast.Node) bool {
@@ -368,9 +368,9 @@ func extract[T ast.Stmt](content string, extractor Extractor[T]) (start, end int
 	prefix := "package main\nfunc templ_container() {\n"
 	src := prefix + content
 
-	node, err := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
 	if node == nil {
-		return 0, 0, stmt, err
+		return 0, 0, stmt, parseErr
 	}
 
 	var found bool
