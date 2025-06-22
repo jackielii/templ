@@ -198,9 +198,9 @@ func SliceArgs(content string) (expr string, err error) {
 	prefix := "package main\nvar templ_args = []any{"
 	src := prefix + content + "}"
 
-	node, err := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
+	node, parseErr := parser.ParseFile(token.NewFileSet(), "", src, parser.AllErrors)
 	if node == nil {
-		return expr, err
+		return expr, parseErr
 	}
 
 	var from, to int
@@ -301,7 +301,7 @@ func Func(content string) (start, end int, stmt any, err error) {
 
 // GenDecl parses a GenDecl (import, type, var, const) declaration and returns the AST node.
 func GenDecl(content string) (start, end int, stmt any, err error) {
-	if !strings.HasPrefix(content, "const") && !strings.HasPrefix(content, "type") && 
+	if !strings.HasPrefix(content, "const") && !strings.HasPrefix(content, "type") &&
 		!strings.HasPrefix(content, "var") && !strings.HasPrefix(content, "import") {
 		return 0, 0, nil, ErrExpectedNodeNotFound
 	}
