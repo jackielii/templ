@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/a-h/parse"
+	"github.com/a-h/templ/internal/lazyloader"
 	lsp "github.com/a-h/templ/lsp/protocol"
 	"github.com/a-h/templ/lsp/uri"
 
@@ -42,8 +43,7 @@ type Server struct {
 	GoSource           map[string]string
 	NoPreload          bool
 	preLoadURIs        []*lsp.DidOpenTextDocumentParams
-	templDocLazyLoader templDocLazyLoader
-	workingDir         string
+	templDocLazyLoader lazyloader.TemplDocLazyLoader
 }
 
 func NewServer(log *slog.Logger, target lsp.Server, cache *SourceMapCache, diagnosticCache *DiagnosticCache, noPreload bool) (s *Server) {
@@ -164,19 +164,12 @@ func (p *Server) parseTemplate(ctx context.Context, uri uri.URI, templateText st
 		}
 		// If the template was even partially parsed, it's still potentially useful.
 		if template != nil {
-			template.Filepath = strings.TrimPrefix(string(uri), "file://")
+			template.Filepath = string(uri)
 		}
 		return
 	}
-	template.Filepath = strings.TrimPrefix(string(uri), "file://")
-
-	// Use enhanced diagnostics if we have a working directory
-	var parsedDiagnostics []parser.Diagnostic
-	if p.workingDir != "" {
-		parsedDiagnostics, err = generator.DiagnoseWithSymbolResolution(template)
-	} else {
-		parsedDiagnostics, err = parser.Diagnose(template)
-	}
+	template.Filepath = string(uri)
+	parsedDiagnostics, err := parser.Diagnose(template)
 	if err != nil {
 		return
 	}
@@ -227,14 +220,6 @@ func (p *Server) parseTemplate(ctx context.Context, uri uri.URI, templateText st
 func (p *Server) Initialize(ctx context.Context, params *lsp.InitializeParams) (result *lsp.InitializeResult, err error) {
 	p.Log.Info("client -> server: Initialize")
 	defer p.Log.Info("client -> server: Initialize end")
-
-	// Symbol resolution requires the project root to be set.
-	if len(params.WorkspaceFolders) > 0 {
-		if u, err := uri.Parse(string(params.WorkspaceFolders[0].URI)); err == nil {
-			p.workingDir = u.Filename()
-		}
-	}
-
 	result, err = p.Target.Initialize(ctx, params)
 	if err != nil {
 		p.Log.Error("Initialize failed", slog.Any("error", err))
@@ -261,12 +246,10 @@ func (p *Server) Initialize(ctx context.Context, params *lsp.InitializeParams) (
 	}
 
 	if p.NoPreload {
-		p.templDocLazyLoader = newTemplDocLazyLoader(
-			templDocHooks{
-				didOpen:  p.didOpen,
-				didClose: p.didClose,
-			},
-		)
+		p.templDocLazyLoader = lazyloader.New(lazyloader.NewParams{
+			TemplDocHandler: p,
+			OpenDocSources:  p.GoSource,
+		})
 	} else {
 		p.preload(ctx, params.WorkspaceFolders)
 	}
@@ -279,8 +262,8 @@ func (p *Server) Initialize(ctx context.Context, params *lsp.InitializeParams) (
 
 func (p *Server) preload(ctx context.Context, workspaceFolders []lsp.WorkspaceFolder) {
 	for _, c := range workspaceFolders {
-		workspacePath := strings.TrimPrefix(c.URI, "file://")
-		werr := filepath.Walk(workspacePath, func(path string, info os.FileInfo, err error) error {
+		path := strings.TrimPrefix(c.URI, "file://")
+		werr := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
@@ -307,14 +290,11 @@ func (p *Server) preload(ctx context.Context, workspaceFolders []lsp.WorkspaceFo
 			w := new(strings.Builder)
 			generatorOutput, err := generator.Generate(template, w)
 			if err != nil {
-				// It's expected to have some failures while parsing the template, since
+				// It's expected to have some failures while generating code from the template, since
 				// you are likely to have invalid docs while you're typing.
 				p.Log.Info("generator failure", slog.Any("error", err))
 			}
 			p.Log.Info("setting source map cache contents", slog.String("uri", string(uri)))
-			if generatorOutput.SourceMap == nil {
-				panic(fmt.Sprintf("generator output for %s has no source map", uri))
-			}
 			p.SourceMapCache.Set(string(uri), generatorOutput.SourceMap)
 			// Set the Go contents.
 			p.GoSource[string(uri)] = w.String()
@@ -388,6 +368,12 @@ var supportedCodeActions = map[string]bool{}
 func (p *Server) CodeAction(ctx context.Context, params *lsp.CodeActionParams) (result []lsp.CodeAction, err error) {
 	p.Log.Info("client -> server: CodeAction", slog.Any("params", params))
 	defer p.Log.Info("client -> server: CodeAction end")
+
+	if p.NoPreload && !p.templDocLazyLoader.HasLoaded(params.TextDocument) {
+		p.Log.Error("lazy loader has not loaded document", slog.Any("params", params))
+		return nil, nil
+	}
+
 	isTemplFile, goURI := convertTemplToGoURI(params.TextDocument.URI)
 	if !isTemplFile {
 		return p.Target.CodeAction(ctx, params)
@@ -726,6 +712,13 @@ func (p *Server) DidChange(ctx context.Context, params *lsp.DidChangeTextDocumen
 	p.Log.Info("setting cache", slog.String("uri", string(params.TextDocument.URI)))
 	p.SourceMapCache.Set(string(params.TextDocument.URI), generatorOutput.SourceMap)
 	p.GoSource[string(params.TextDocument.URI)] = w.String()
+
+	if p.NoPreload {
+		if err := p.templDocLazyLoader.Sync(ctx, params); err != nil {
+			p.Log.Error("lazy loader sync", slog.Any("error", err))
+		}
+	}
+
 	// Change the path.
 	params.TextDocument.URI = goURI
 	params.TextDocument.URI = goURI
@@ -759,13 +752,13 @@ func (p *Server) DidClose(ctx context.Context, params *lsp.DidCloseTextDocumentP
 	defer p.Log.Info("client -> server: DidClose end")
 
 	if p.NoPreload {
-		return p.templDocLazyLoader.unload(ctx, params)
+		return p.templDocLazyLoader.Unload(ctx, params)
 	}
 
-	return p.didClose(ctx, params)
+	return p.HandleDidClose(ctx, params)
 }
 
-func (p *Server) didClose(ctx context.Context, params *lsp.DidCloseTextDocumentParams) (err error) {
+func (p *Server) HandleDidClose(ctx context.Context, params *lsp.DidCloseTextDocumentParams) (err error) {
 	isTemplFile, goURI := convertTemplToGoURI(params.TextDocument.URI)
 	if !isTemplFile {
 		return p.Target.DidClose(ctx, params)
@@ -783,13 +776,13 @@ func (p *Server) DidOpen(ctx context.Context, params *lsp.DidOpenTextDocumentPar
 	defer p.Log.Info("client -> server: DidOpen end")
 
 	if p.NoPreload {
-		return p.templDocLazyLoader.load(ctx, params)
+		return p.templDocLazyLoader.Load(ctx, params)
 	}
 
-	return p.didOpen(ctx, params)
+	return p.HandleDidOpen(ctx, params)
 }
 
-func (p *Server) didOpen(ctx context.Context, params *lsp.DidOpenTextDocumentParams) (err error) {
+func (p *Server) HandleDidOpen(ctx context.Context, params *lsp.DidOpenTextDocumentParams) (err error) {
 	isTemplFile, goURI := convertTemplToGoURI(params.TextDocument.URI)
 	if !isTemplFile {
 		return p.Target.DidOpen(ctx, params)
@@ -808,7 +801,6 @@ func (p *Server) didOpen(ctx context.Context, params *lsp.DidOpenTextDocumentPar
 	// Generate the output code and cache the source map and Go contents to use during completion
 	// requests.
 	w := new(strings.Builder)
-	// Working directory detection is now handled automatically by the unified resolver
 	generatorOutput, err := generator.Generate(template, w)
 	if err != nil {
 		return
