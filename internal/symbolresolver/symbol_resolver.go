@@ -1,0 +1,455 @@
+package symbolresolver
+
+import (
+	"fmt"
+	"go/ast"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"strings"
+
+	"github.com/a-h/templ/parser/v2"
+	"golang.org/x/tools/go/packages"
+)
+
+// SymbolResolverV2 handles type resolution for templ templates
+type SymbolResolverV2 struct {
+	packages map[string]*packages.Package // key: package path or directory
+	overlays map[string][]byte            // key: file path -> content
+}
+
+// NewSymbolResolverV2 creates a new symbol resolver
+func NewSymbolResolverV2() *SymbolResolverV2 {
+	return &SymbolResolverV2{
+		packages: make(map[string]*packages.Package),
+		overlays: make(map[string][]byte),
+	}
+}
+
+// PreprocessFiles analyzes all template files and prepares overlays
+// This is called once before any code generation begins
+func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
+	// Group files by directory to identify packages
+	packageDirs := make(map[string][]string)
+	for _, file := range files {
+		dir := filepath.Dir(file)
+		packageDirs[dir] = append(packageDirs[dir], file)
+	}
+
+	// Parse each file and generate overlays
+	for _, file := range files {
+		// Parse the template file
+		tf, err := parser.Parse(file)
+		if err != nil {
+			return fmt.Errorf("failed to parse %s: %w", file, err)
+		}
+
+		// Generate overlay
+		overlay, err := r.generateOverlay(tf)
+		if err != nil {
+			return fmt.Errorf("failed to generate overlay for %s: %w", file, err)
+		}
+
+		// Store overlay with _templ.go suffix
+		overlayPath := strings.TrimSuffix(file, ".templ") + "_templ.go"
+		r.overlays[overlayPath] = []byte(overlay)
+	}
+
+	// Load packages with overlays
+	for dir := range packageDirs {
+		if _, err := r.LoadPackage(dir); err != nil {
+			// Log warning but continue - some packages might have issues
+			// fmt.Printf("Warning: failed to load package in %s: %v\n", dir, err)
+		}
+	}
+
+	return nil
+}
+
+// ResolveComponent finds a component's type signature
+// Called during code generation for element syntax like <Button />
+func (r *SymbolResolverV2) ResolveComponent(fromDir, componentName string, tf *parser.TemplateFile) (*types.Signature, error) {
+	var pkgPath string
+	var localName string
+
+	// Check if component is imported (e.g., pkg.Component)
+	if strings.Contains(componentName, ".") {
+		parts := strings.SplitN(componentName, ".", 2)
+		alias := parts[0]
+		localName = parts[1]
+
+		// Find the import path for this alias
+		pkgPath = r.findImportPath(tf, alias)
+		if pkgPath == "" {
+			return nil, fmt.Errorf("import alias %s not found", alias)
+		}
+	} else {
+		// Local component
+		localName = componentName
+	}
+
+	// Load the package
+	var pkg *packages.Package
+	var err error
+	if pkgPath != "" {
+		// Load by package path
+		if p, ok := r.packages[pkgPath]; ok {
+			pkg = p
+		} else {
+			return nil, fmt.Errorf("package %s not loaded", pkgPath)
+		}
+	} else {
+		// Load local package
+		pkg, err = r.LoadPackage(fromDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Find the component in the package
+	if pkg.Types == nil {
+		return nil, fmt.Errorf("no type information for package %s", pkg.PkgPath)
+	}
+
+	obj := pkg.Types.Scope().Lookup(localName)
+	if obj == nil {
+		return nil, fmt.Errorf("component %s not found in package %s", localName, pkg.PkgPath)
+	}
+
+	// Extract signature
+	switch obj := obj.(type) {
+	case *types.Func:
+		// Function component
+		return obj.Type().(*types.Signature), nil
+	case *types.TypeName:
+		// Struct component - look for Render method
+		method, _, _ := types.LookupFieldOrMethod(obj.Type(), true, pkg.Types, "Render")
+		if method == nil {
+			return nil, fmt.Errorf("%s does not implement templ.Component", localName)
+		}
+		if fn, ok := method.(*types.Func); ok {
+			return fn.Type().(*types.Signature), nil
+		}
+	}
+
+	return nil, fmt.Errorf("%s is not a valid component", componentName)
+}
+
+// findImportPath finds the import path for a given alias in the template file
+func (r *SymbolResolverV2) findImportPath(tf *parser.TemplateFile, alias string) string {
+	for _, node := range tf.Nodes {
+		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
+			if goExpr.Expression.Stmt != nil {
+				if genDecl, ok := goExpr.Expression.Stmt.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
+					for _, spec := range genDecl.Specs {
+						if impSpec, ok := spec.(*ast.ImportSpec); ok {
+							// Check if this import has the alias we're looking for
+							var importAlias string
+							if impSpec.Name != nil {
+								importAlias = impSpec.Name.Name
+							} else {
+								// Default alias is the last part of the path
+								path := strings.Trim(impSpec.Path.Value, `"`)
+								parts := strings.Split(path, "/")
+								importAlias = parts[len(parts)-1]
+							}
+							if importAlias == alias {
+								return strings.Trim(impSpec.Path.Value, `"`)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// ResolveExpression determines the type of a Go expression
+// Called during code generation for expressions like { user.Name }
+func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, scope *types.Scope) (types.Type, error) {
+	if expr == nil {
+		return nil, fmt.Errorf("expression is nil")
+	}
+	if scope == nil {
+		return nil, fmt.Errorf("scope is nil")
+	}
+
+	// Try to resolve the expression type using the scope
+	switch e := expr.(type) {
+	case *ast.Ident:
+		// Simple identifier
+		obj := scope.Lookup(e.Name)
+		if obj == nil {
+			return nil, fmt.Errorf("identifier %s not found in scope", e.Name)
+		}
+		return obj.Type(), nil
+
+	case *ast.SelectorExpr:
+		// Field or method access (e.g., user.Name)
+		// First resolve the base expression
+		baseType, err := r.ResolveExpression(e.X, scope)
+		if err != nil {
+			return nil, err
+		}
+
+		// Dereference pointer if needed
+		if ptr, ok := baseType.(*types.Pointer); ok {
+			baseType = ptr.Elem()
+		}
+
+		// Look up the field or method
+		obj, _, _ := types.LookupFieldOrMethod(baseType, true, nil, e.Sel.Name)
+		if obj == nil {
+			return nil, fmt.Errorf("field or method %s not found", e.Sel.Name)
+		}
+		return obj.Type(), nil
+
+	case *ast.IndexExpr:
+		// Array/slice/map index (e.g., items[0])
+		baseType, err := r.ResolveExpression(e.X, scope)
+		if err != nil {
+			return nil, err
+		}
+
+		switch t := baseType.Underlying().(type) {
+		case *types.Array:
+			return t.Elem(), nil
+		case *types.Slice:
+			return t.Elem(), nil
+		case *types.Map:
+			return t.Elem(), nil
+		default:
+			return nil, fmt.Errorf("cannot index type %s", baseType)
+		}
+
+	case *ast.CallExpr:
+		// Function call
+		fnType, err := r.ResolveExpression(e.Fun, scope)
+		if err != nil {
+			return nil, err
+		}
+
+		sig, ok := fnType.(*types.Signature)
+		if !ok {
+			return nil, fmt.Errorf("not a function type")
+		}
+
+		results := sig.Results()
+		if results.Len() == 0 {
+			return nil, fmt.Errorf("function has no return values")
+		}
+		return results.At(0).Type(), nil
+
+	case *ast.BasicLit:
+		// Literal values
+		switch e.Kind {
+		case token.INT:
+			return types.Typ[types.Int], nil
+		case token.FLOAT:
+			return types.Typ[types.Float64], nil
+		case token.STRING:
+			return types.Typ[types.String], nil
+		case token.CHAR:
+			return types.Typ[types.Rune], nil
+		default:
+			return nil, fmt.Errorf("unknown literal kind: %v", e.Kind)
+		}
+
+	default:
+		return nil, fmt.Errorf("unsupported expression type: %T", expr)
+	}
+}
+
+// LoadPackage loads a package with type information
+func (r *SymbolResolverV2) LoadPackage(dir string) (*packages.Package, error) {
+	// Check cache first
+	if pkg, ok := r.packages[dir]; ok {
+		return pkg, nil
+	}
+
+	// Configure package loading with overlays
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo |
+			packages.NeedSyntax | packages.NeedImports | packages.NeedDeps,
+		Dir:     dir,
+		Overlay: r.overlays,
+	}
+
+	// Load the package
+	pkgs, err := packages.Load(cfg, ".")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load package: %w", err)
+	}
+
+	if len(pkgs) == 0 {
+		return nil, fmt.Errorf("no packages found in %s", dir)
+	}
+
+	pkg := pkgs[0]
+
+	// Allow packages with certain types of errors (e.g., from generated files)
+	if len(pkg.Errors) > 0 {
+		for _, err := range pkg.Errors {
+			// Skip errors from generated _templ.go files
+			if !strings.Contains(err.Error(), "_templ.go") {
+				return nil, fmt.Errorf("package has errors: %v", pkg.Errors)
+			}
+		}
+	}
+
+	// Cache the result
+	r.packages[dir] = pkg
+	// Also cache by package path for cross-package lookups
+	if pkg.PkgPath != "" {
+		r.packages[pkg.PkgPath] = pkg
+	}
+
+	return pkg, nil
+}
+
+// generateOverlay creates a Go stub file for a templ template
+func (r *SymbolResolverV2) generateOverlay(tf *parser.TemplateFile) (string, error) {
+	if tf == nil {
+		return "", fmt.Errorf("template file is nil")
+	}
+
+	// Extract package name
+	pkgName := ""
+	if tf.Package.Expression.Value != "" {
+		pkgName = strings.TrimPrefix(tf.Package.Expression.Value, "package ")
+		pkgName = strings.TrimSpace(pkgName)
+	}
+	if pkgName == "" {
+		return "", fmt.Errorf("no package declaration found")
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("package %s\n\n", pkgName))
+
+	// Collect imports and generate stubs
+	var imports []*ast.GenDecl
+	var hasTemplImport bool
+	var needsTemplImport bool
+	var bodySection strings.Builder
+
+	// Process nodes
+	for _, node := range tf.Nodes {
+		switch n := node.(type) {
+		case *parser.TemplateFileGoExpression:
+			// Check if this is an import declaration
+			if n.Expression.Stmt != nil {
+				if genDecl, ok := n.Expression.Stmt.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
+					imports = append(imports, genDecl)
+					// Check if templ is imported
+					for _, spec := range genDecl.Specs {
+						if impSpec, ok := spec.(*ast.ImportSpec); ok {
+							if impSpec.Path != nil && strings.Trim(impSpec.Path.Value, `"`) == "github.com/a-h/templ" {
+								hasTemplImport = true
+							}
+						}
+					}
+				} else if genDecl, ok := n.Expression.Stmt.(*ast.GenDecl); ok && genDecl.Tok == token.TYPE {
+					// Include type definitions
+					bodySection.WriteString(n.Expression.Value)
+					bodySection.WriteString("\n\n")
+				}
+			} else if strings.Contains(n.Expression.Value, "type ") {
+				// Fallback for type definitions without AST
+				bodySection.WriteString(n.Expression.Value)
+				bodySection.WriteString("\n\n")
+			} else if strings.Contains(n.Expression.Value, "import") && len(imports) == 0 {
+				// Fallback for imports without AST (shouldn't happen normally)
+				imports = append(imports, &ast.GenDecl{
+					Tok: token.IMPORT,
+				})
+			}
+
+		case *parser.HTMLTemplate:
+			needsTemplImport = true
+			// Generate function stub
+			signature := strings.TrimSpace(n.Expression.Value)
+			bodySection.WriteString(fmt.Sprintf("func %s templ.Component {\n", signature))
+			bodySection.WriteString("\treturn templ.NopComponent\n")
+			bodySection.WriteString("}\n\n")
+
+		case *parser.CSSTemplate:
+			needsTemplImport = true
+			// CSS templates can have parameters, use the full expression
+			signature := strings.TrimSpace(n.Expression.Value)
+			bodySection.WriteString(fmt.Sprintf("func %s templ.CSSClass {\n", signature))
+			bodySection.WriteString("\treturn templ.ComponentCSSClass{}\n")
+			bodySection.WriteString("}\n\n")
+
+		case *parser.ScriptTemplate:
+			needsTemplImport = true
+			bodySection.WriteString(fmt.Sprintf("func %s(", n.Name.Value))
+			if n.Parameters.Value != "" {
+				bodySection.WriteString(n.Parameters.Value)
+			}
+			bodySection.WriteString(") templ.ComponentScript {\n")
+			bodySection.WriteString("\treturn templ.ComponentScript{}\n")
+			bodySection.WriteString("}\n\n")
+		}
+	}
+
+	// Write imports
+	if needsTemplImport || len(imports) > 0 {
+		if len(imports) > 0 {
+			// Check if we have multi-line or single imports
+			hasMultiLineImport := false
+			for _, imp := range imports {
+				if imp.Lparen.IsValid() || len(imp.Specs) > 1 {
+					hasMultiLineImport = true
+					break
+				}
+			}
+
+			if hasMultiLineImport || (needsTemplImport && !hasTemplImport) {
+				// Write as multi-line import
+				sb.WriteString("import (\n")
+
+				// Add templ import first if needed
+				if needsTemplImport && !hasTemplImport {
+					sb.WriteString("\t\"github.com/a-h/templ\"\n")
+				}
+
+				// Add all existing imports
+				for _, imp := range imports {
+					for _, spec := range imp.Specs {
+						if impSpec, ok := spec.(*ast.ImportSpec); ok {
+							sb.WriteString("\t")
+							if impSpec.Name != nil {
+								sb.WriteString(impSpec.Name.Name + " ")
+							}
+							sb.WriteString(impSpec.Path.Value)
+							sb.WriteString("\n")
+						}
+					}
+				}
+				sb.WriteString(")\n")
+			} else {
+				// Single import without templ needed
+				for _, imp := range imports {
+					sb.WriteString("import ")
+					if spec := imp.Specs[0].(*ast.ImportSpec); spec != nil {
+						if spec.Name != nil {
+							sb.WriteString(spec.Name.Name + " ")
+						}
+						sb.WriteString(spec.Path.Value)
+					}
+					sb.WriteString("\n")
+				}
+			}
+		} else if needsTemplImport {
+			// No imports exist, create new import
+			sb.WriteString("import \"github.com/a-h/templ\"\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	// Write body
+	sb.WriteString(bodySection.String())
+
+	return sb.String(), nil
+}
