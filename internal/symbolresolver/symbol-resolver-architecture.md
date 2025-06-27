@@ -10,8 +10,7 @@ It should be used in the following way:
 
 1. at the start of the templ generation process in `../cmd/templ/generatecmd/cmd.go`, we want to add a preprocessing step that walks all the files needs generation, symbol resolver should receive these files.
 2. parse all the files and find out which ones require type analysis or symbols resolution, for a start, let's use all of them.
-3. sort the modules topologically into a dependency graph
-4. use `golang.org/x/tools/go/packages` to load the packages
+4. use `golang.org/x/tools/go/packages` to load the packages and the dependencies of the packages.
 
 ### Performance Critical: Package Loading Strategy
 
@@ -29,6 +28,77 @@ for _, dir := range dirs {
 ```
 
 The single-call approach allows the Go packages system to optimize dependency resolution and avoid redundant work.
+
+### Correct LoadMode Configuration
+
+**CRITICAL**: Due to known bugs in `golang.org/x/tools/go/packages`, certain LoadMode combinations must be used together:
+
+```go
+cfg := &packages.Config{
+    Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
+          packages.NeedImports | packages.NeedDeps | packages.NeedTypes |
+          packages.NeedTypesInfo | packages.NeedSyntax,
+    Dir:     baseDir,
+    Overlay: overlays,
+}
+```
+
+Key requirements:
+- **NeedTypesInfo requires NeedTypes**: Using NeedTypesInfo alone will result in nil TypesInfo
+- **NeedCompiledGoFiles**: Required to get overlay files in the package
+- **NeedDeps**: Required for cross-package resolution
+
+### Package Caching Strategy
+
+Packages must be cached by multiple keys due to how `packages.Load` returns results:
+1. **By PkgPath**: The canonical import path (e.g., "github.com/user/project/pkg")
+2. **By ID**: May be a relative path (e.g., "./generator/test-element-component")
+3. **By Directory**: Absolute filesystem path where the package resides
+
+This multi-key caching is necessary because:
+- The same package may be referenced differently depending on context
+- Relative imports in patterns result in IDs that differ from PkgPath
+- Directory-based lookups are needed for local component resolution
+
+### Module Boundary Limitation and Solution
+
+**CRITICAL LIMITATION**: The overlay feature in `golang.org/x/tools/go/packages` does not work properly across module boundaries. This is a known issue documented in:
+- [Issue #71075: overlay does not work properly with external module files](https://github.com/golang/go/issues/71075)
+- [Issue #71098: overlay does not cause ExportFile to be cleared](https://github.com/golang/go/issues/71098)
+
+**Symptoms**: When loading packages from multiple modules in a single `packages.Load` call with overlays:
+- Packages may have empty scopes despite successful loading
+- Type information may be missing or incomplete
+- Cross-module imports may fail to resolve
+
+**Solution**: Load packages grouped by module, not just by directory:
+
+```go
+// 1. First, identify module boundaries by finding go.mod files
+moduleFiles := make(map[string][]string) // module root -> files
+for _, file := range templFiles {
+    moduleRoot := findModuleRoot(filepath.Dir(file))
+    moduleFiles[moduleRoot] = append(moduleFiles[moduleRoot], file)
+}
+
+// 2. Load packages for each module separately
+for moduleRoot, files := range moduleFiles {
+    // Group by package within this module
+    packageDirs := make(map[string][]string)
+    for _, file := range files {
+        dir := filepath.Dir(file)
+        packageDirs[dir] = append(packageDirs[dir], file)
+    }
+    
+    // Load all packages in this module together
+    loadPackagesForModule(moduleRoot, packageDirs)
+}
+```
+
+This approach ensures:
+- Overlays work correctly within each module
+- Type information is properly populated
+- Cross-module references can still be resolved through the package cache
 
 ### Element component
 

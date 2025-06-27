@@ -42,17 +42,19 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 		absFiles = append(absFiles, absFile)
 	}
 
-	// Group files by directory to identify packages
-	packageDirs := make(map[string][]string)
+	// First, group files by module (identified by go.mod location)
+	moduleFiles := make(map[string][]string) // module root -> files
 	for _, file := range absFiles {
 		if !strings.HasSuffix(file, ".templ") {
 			continue // Only process templ files
 		}
-		dir := filepath.Dir(file)
-		packageDirs[dir] = append(packageDirs[dir], file)
+
+		// Find the module root for this file
+		moduleRoot := r.findModuleRoot(filepath.Dir(file))
+		moduleFiles[moduleRoot] = append(moduleFiles[moduleRoot], file)
 	}
 
-	// Parse each file and generate overlays
+	// Parse each file and generate overlays (do this before loading packages)
 	for _, file := range absFiles {
 		if !strings.HasSuffix(file, ".templ") {
 			continue // Only process templ files
@@ -74,39 +76,57 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 		r.overlays[overlayPath] = []byte(overlay)
 	}
 
-	// Collect all directories for loading packages in one go
-	loadPaths := slices.Collect(maps.Keys(packageDirs))
-	if len(loadPaths) == 0 {
-		return fmt.Errorf("no template files found to preprocess")
-	}
+	// Now load packages for each module separately
+	for moduleRoot, files := range moduleFiles {
+		// Group files by package within this module
+		packageDirs := make(map[string][]string)
+		for _, file := range files {
+			dir := filepath.Dir(file)
+			packageDirs[dir] = append(packageDirs[dir], file)
+		}
 
-	// Find a common directory to use as the base for loading
-	// This helps packages.Load understand the module context
-	var baseDir string
-	if len(loadPaths) > 0 {
-		baseDir = loadPaths[0]
-		// Try to find the module root by looking for go.mod
-		for dir := baseDir; dir != "/" && dir != ""; dir = filepath.Dir(dir) {
-			if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-				baseDir = dir
-				break
-			}
+		// Load packages for this module
+		if err := r.loadPackagesForModule(moduleRoot, packageDirs); err != nil {
+			// Log the error but continue with other modules
+			fmt.Printf("Warning: failed to load packages for module %s: %v\n", moduleRoot, err)
 		}
 	}
 
+	return nil
+}
+
+// findModuleRoot finds the go.mod file for a given directory
+func (r *SymbolResolverV2) findModuleRoot(dir string) string {
+	for current := dir; current != "/" && current != ""; current = filepath.Dir(current) {
+		if _, err := os.Stat(filepath.Join(current, "go.mod")); err == nil {
+			return current
+		}
+	}
+	// If no go.mod found, return the original directory
+	return dir
+}
+
+// loadPackagesForModule loads all packages within a single module
+func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs map[string][]string) error {
+	loadPaths := slices.Collect(maps.Keys(packageDirs))
+	if len(loadPaths) == 0 {
+		return nil
+	}
+
+	fmt.Printf("Loading packages for module %s with %d directories\n", moduleRoot, len(loadPaths))
+
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo |
-			packages.NeedSyntax | packages.NeedImports | packages.NeedDeps | packages.NeedFiles,
-		Dir:     baseDir,
+		Mode:    packages.LoadSyntax,
+		Dir:     moduleRoot,
 		Overlay: r.overlays,
 	}
 
-	// Convert directory paths to package patterns relative to base
+	// Convert directory paths to package patterns relative to module root
 	patterns := make([]string, 0, len(loadPaths))
 	for _, dir := range loadPaths {
-		relPath, err := filepath.Rel(baseDir, dir)
+		relPath, err := filepath.Rel(moduleRoot, dir)
 		if err != nil || strings.HasPrefix(relPath, "..") {
-			// If we can't make it relative or it's outside base, use absolute
+			// If we can't make it relative or it's outside module, use absolute
 			patterns = append(patterns, dir)
 		} else {
 			// Use relative pattern
@@ -115,19 +135,17 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 	}
 
 	pkgs, err := packages.Load(cfg, patterns...)
-	if err != nil {
-		// packages.Load often returns partial results even with errors
-		// Check if we got any packages at all
-		// if len(pkgs) == 0 {
-		// 	return fmt.Errorf("failed to load any packages: %w", err)
-		// }
-		// We have some packages, so we'll continue but note the error
-		// This commonly happens with module boundaries or missing dependencies
-		println("Warning: packages.Load encountered errors, but continuing with available packages:", err.Error())
+	if err != nil && len(pkgs) == 0 {
+		return fmt.Errorf("failed to load any packages: %w", err)
 	}
+
+	// Create a map to track which directories each package belongs to
+	pkgToDirs := make(map[string][]string)
 
 	// Process all loaded packages
 	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		// fmt.Printf("  Visiting package ID=%s PkgPath=%s\n", pkg.ID, pkg.PkgPath)
+
 		// Skip packages with certain errors
 		if len(pkg.Errors) > 0 {
 			hasRealError := false
@@ -137,12 +155,15 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 				if !strings.Contains(errStr, "_templ.go") &&
 					!strings.Contains(errStr, "no Go files") &&
 					!strings.Contains(errStr, "no required module provides package") &&
-					!strings.Contains(errStr, "outside main module") {
+					!strings.Contains(errStr, "outside main module") &&
+					!strings.Contains(errStr, "main module") && // Allow "main module does not contain package" errors
+					!strings.Contains(errStr, "imported and not used") { // Allow unused import errors in overlays
 					hasRealError = true
 					break
 				}
 			}
 			if hasRealError {
+				// fmt.Printf("    Skipping due to errors: %v\n", pkg.Errors)
 				return // Skip this package
 			}
 		}
@@ -152,30 +173,76 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 			r.packages[pkg.PkgPath] = pkg
 		}
 
-		// Also cache by directory for local lookups
-		// Find the directory this package belongs to
+		// Also cache by ID (which might be a relative path like ./foo/bar)
+		if pkg.ID != "" && pkg.ID != pkg.PkgPath {
+			r.packages[pkg.ID] = pkg
+		}
+
+		// Track which directories might belong to this package
 		for _, file := range pkg.GoFiles {
 			absFile, err := filepath.Abs(file)
-			if err != nil {
-				// Log but continue with other files
-				continue
+			if err == nil {
+				dir := filepath.Dir(absFile)
+				pkgToDirs[pkg.PkgPath] = append(pkgToDirs[pkg.PkgPath], dir)
 			}
-			dir := filepath.Dir(absFile)
-			r.packages[dir] = pkg
-			break // One mapping per package is enough
+		}
+
+		// Also check CompiledGoFiles which includes overlays
+		for _, file := range pkg.CompiledGoFiles {
+			if strings.HasSuffix(file, "_templ.go") {
+				// This is an overlay file, extract the directory
+				dir := filepath.Dir(strings.TrimSuffix(file, "_templ.go") + ".templ")
+				pkgToDirs[pkg.PkgPath] = append(pkgToDirs[pkg.PkgPath], dir)
+			}
 		}
 	})
 
-	// Also ensure templ package is available in cache
-	if _, ok := r.packages["github.com/a-h/templ"]; !ok {
-		println("Loading templ package for component resolution")
-		cfg := &packages.Config{
-			Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo,
+	// Now cache packages by the directories where we found templ files
+	for dir, templFiles := range packageDirs {
+		// Find which package this directory belongs to
+		found := false
+		for pkgPath, dirs := range pkgToDirs {
+			for _, pkgDir := range dirs {
+				if pkgDir == dir {
+					if pkg, ok := r.packages[pkgPath]; ok {
+						r.packages[dir] = pkg
+						found = true
+						break
+					}
+				}
+			}
+			if found {
+				break
+			}
 		}
-		templPkgs, err := packages.Load(cfg, "github.com/a-h/templ")
-		if err == nil && len(templPkgs) > 0 {
-			r.packages["github.com/a-h/templ"] = templPkgs[0]
+
+		// If we still haven't found a package for this directory,
+		// it might be a package with only templ files
+		if !found {
+			// Try to find by matching the package pattern
+			relPath, err := filepath.Rel(moduleRoot, dir)
+			if err == nil {
+				pattern := "./" + relPath
+				// Look through all loaded packages for a match
+				for _, pkg := range pkgs {
+					if pkg.ID == pattern {
+						r.packages[dir] = pkg
+						if pkg.PkgPath != "" {
+							r.packages[pkg.PkgPath] = pkg
+						}
+						found = true
+						break
+					}
+					// Also check if the package path ends with our relative path
+					if pkg.PkgPath != "" && strings.HasSuffix(pkg.PkgPath, "/"+relPath) {
+						r.packages[dir] = pkg
+						found = true
+						break
+					}
+				}
+			}
 		}
+		_ = templFiles // avoid unused variable warning
 	}
 
 	return nil
@@ -229,12 +296,21 @@ func (r *SymbolResolverV2) ResolveComponent(fromDir, componentName string, tf *p
 
 	// Find the component in the package
 	if pkg.Types == nil {
-		return nil, fmt.Errorf("no type information for package %s", pkg.PkgPath)
+		return nil, fmt.Errorf("no type information for package %s (ID: %s)", pkg.PkgPath, pkg.ID)
+	}
+
+	if pkg.Types.Scope() == nil {
+		return nil, fmt.Errorf("package %s has no scope (ID: %s)", pkg.PkgPath, pkg.ID)
 	}
 
 	obj := pkg.Types.Scope().Lookup(localName)
 	if obj == nil {
-		return nil, fmt.Errorf("component %s not found in package %s", localName, pkg.PkgPath)
+		// Try to provide more helpful error message
+		availableNames := pkg.Types.Scope().Names()
+		if len(availableNames) == 0 {
+			return nil, fmt.Errorf("component %s not found in package %s - package scope is empty", localName, pkg.PkgPath)
+		}
+		return nil, fmt.Errorf("component %s not found in package %s (available: %v)", localName, pkg.PkgPath, availableNames)
 	}
 
 	// Extract signature

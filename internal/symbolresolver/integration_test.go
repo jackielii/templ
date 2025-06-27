@@ -20,9 +20,12 @@ func TestIntegration_GeneratorDirectory(t *testing.T) {
 
 	// Find all .templ files in generator directory
 	var templFiles []string
-	generatorDir := filepath.Join("..", "..", "generator")
+	generatorDir, err := filepath.Abs(filepath.Join("..", "..", "generator"))
+	if err != nil {
+		t.Fatalf("Failed to get absolute path for generator directory: %v", err)
+	}
 
-	err := filepath.Walk(generatorDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(generatorDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
