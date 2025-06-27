@@ -19,7 +19,7 @@ var (
 
 var defaultRegexp = regexp.MustCompile(`^default\s*:`)
 
-func Case(content string) (start, end int, stmt any, err error) {
+func Case(content string) (start, end int, stmt ast.Node, err error) {
 	if !strings.HasPrefix(content, "case ") && !defaultRegexp.MatchString(content) {
 		return 0, 0, stmt, ErrExpectedNodeNotFound
 	}
@@ -50,7 +50,7 @@ func Case(content string) (start, end int, stmt any, err error) {
 	return start, end, stmt, nil
 }
 
-func If(content string) (start, end int, stmt any, err error) {
+func If(content string) (start, end int, stmt ast.Node, err error) {
 	if !strings.HasPrefix(content, "if") {
 		return 0, 0, nil, ErrExpectedNodeNotFound
 	}
@@ -65,7 +65,7 @@ func If(content string) (start, end int, stmt any, err error) {
 	})
 }
 
-func For(content string) (start, end int, stmt any, err error) {
+func For(content string) (start, end int, stmt ast.Node, err error) {
 	if !strings.HasPrefix(content, "for") {
 		return 0, 0, nil, ErrExpectedNodeNotFound
 	}
@@ -85,7 +85,7 @@ func For(content string) (start, end int, stmt any, err error) {
 	})
 }
 
-func Switch(content string) (start, end int, stmt any, err error) {
+func Switch(content string) (start, end int, stmt ast.Node, err error) {
 	if !strings.HasPrefix(content, "switch") {
 		return 0, 0, nil, ErrExpectedNodeNotFound
 	}
@@ -105,7 +105,7 @@ func Switch(content string) (start, end int, stmt any, err error) {
 	})
 }
 
-func TemplExpression(src string) (start, end int, stmt any, err error) {
+func TemplExpression(src string) (start, end int, stmt ast.Node, err error) {
 	var s scanner.Scanner
 	fset := token.NewFileSet()
 	file := fset.AddFile("", fset.Base(), len(src))
@@ -133,7 +133,7 @@ func TemplExpression(src string) (start, end int, stmt any, err error) {
 	return 0, ep.End, nil, nil
 }
 
-func Expression(src string) (start, end int, stmt any, err error) {
+func Expression(src string) (start, end int, stmt ast.Node, err error) {
 	var s scanner.Scanner
 	fset := token.NewFileSet()
 	file := fset.AddFile("", fset.Base(), len(src))
@@ -269,7 +269,7 @@ func FuncSig(content string) (name, expr string, decl *ast.FuncDecl, err error) 
 	return name, expr, decl, err
 }
 
-func Func(content string) (start, end int, stmt any, err error) {
+func Func(content string) (start, end int, stmt ast.Node, err error) {
 	if !strings.HasPrefix(content, "func") {
 		return 0, 0, nil, ErrExpectedNodeNotFound
 	}
@@ -300,7 +300,7 @@ func Func(content string) (start, end int, stmt any, err error) {
 }
 
 // GenDecl parses a GenDecl (import, type, var, const) declaration and returns the AST node.
-func GenDecl(content string) (start, end int, stmt any, err error) {
+func GenDecl(content string) (start, end int, stmt ast.Node, err error) {
 	if !strings.HasPrefix(content, "const") && !strings.HasPrefix(content, "type") &&
 		!strings.HasPrefix(content, "var") && !strings.HasPrefix(content, "import") {
 		return 0, 0, nil, ErrExpectedNodeNotFound

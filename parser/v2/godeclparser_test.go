@@ -115,7 +115,7 @@ func TestGoImportParser(t *testing.T) {
 			}
 
 			// The Stmt field should be populated for valid imports
-			if got.Expression.Stmt == nil {
+			if got.Expression.AstNode == nil {
 				t.Errorf("expected Stmt to be populated, got nil")
 			}
 		})
@@ -1033,14 +1033,14 @@ func TestGoDeclParsersWithAST(t *testing.T) {
 		}
 
 		// Check that AST is populated
-		if got.Expression.Stmt == nil {
+		if got.Expression.AstNode == nil {
 			t.Fatalf("expected Stmt to be populated, got nil")
 		}
 
 		// Verify it's a GenDecl with CONST token
-		genDecl, ok := got.Expression.Stmt.(*ast.GenDecl)
+		genDecl, ok := got.Expression.AstNode.(*ast.GenDecl)
 		if !ok {
-			t.Fatalf("expected *ast.GenDecl, got %T", got.Expression.Stmt)
+			t.Fatalf("expected *ast.GenDecl, got %T", got.Expression.AstNode)
 		}
 		if genDecl.Tok != token.CONST {
 			t.Errorf("expected CONST token, got %v", genDecl.Tok)
@@ -1059,14 +1059,14 @@ func TestGoDeclParsersWithAST(t *testing.T) {
 		}
 
 		// Check that AST is populated
-		if got.Expression.Stmt == nil {
+		if got.Expression.AstNode == nil {
 			t.Fatalf("expected Stmt to be populated, got nil")
 		}
 
 		// Verify it's a GenDecl with TYPE token
-		genDecl, ok := got.Expression.Stmt.(*ast.GenDecl)
+		genDecl, ok := got.Expression.AstNode.(*ast.GenDecl)
 		if !ok {
-			t.Fatalf("expected *ast.GenDecl, got %T", got.Expression.Stmt)
+			t.Fatalf("expected *ast.GenDecl, got %T", got.Expression.AstNode)
 		}
 		if genDecl.Tok != token.TYPE {
 			t.Errorf("expected TYPE token, got %v", genDecl.Tok)
@@ -1085,14 +1085,14 @@ func TestGoDeclParsersWithAST(t *testing.T) {
 		}
 
 		// Check that AST is populated
-		if got.Expression.Stmt == nil {
+		if got.Expression.AstNode == nil {
 			t.Fatalf("expected Stmt to be populated, got nil")
 		}
 
 		// Verify it's a GenDecl with VAR token
-		genDecl, ok := got.Expression.Stmt.(*ast.GenDecl)
+		genDecl, ok := got.Expression.AstNode.(*ast.GenDecl)
 		if !ok {
-			t.Fatalf("expected *ast.GenDecl, got %T", got.Expression.Stmt)
+			t.Fatalf("expected *ast.GenDecl, got %T", got.Expression.AstNode)
 		}
 		if genDecl.Tok != token.VAR {
 			t.Errorf("expected VAR token, got %v", genDecl.Tok)
@@ -1111,14 +1111,14 @@ func TestGoDeclParsersWithAST(t *testing.T) {
 		}
 
 		// Check that AST is populated
-		if got.Expression.Stmt == nil {
+		if got.Expression.AstNode == nil {
 			t.Fatalf("expected Stmt to be populated, got nil")
 		}
 
 		// Verify it's a FuncDecl
-		funcDecl, ok := got.Expression.Stmt.(*ast.FuncDecl)
+		funcDecl, ok := got.Expression.AstNode.(*ast.FuncDecl)
 		if !ok {
-			t.Fatalf("expected *ast.FuncDecl, got %T", got.Expression.Stmt)
+			t.Fatalf("expected *ast.FuncDecl, got %T", got.Expression.AstNode)
 		}
 		if funcDecl.Name.Name != "main" {
 			t.Errorf("expected function name 'main', got %q", funcDecl.Name.Name)
@@ -1140,14 +1140,14 @@ func TestGoDeclParsersWithAST(t *testing.T) {
 		}
 
 		// Check that AST is populated
-		if got.Expression.Stmt == nil {
+		if got.Expression.AstNode == nil {
 			t.Fatalf("expected Stmt to be populated, got nil")
 		}
 
 		// Verify it's a FuncDecl with receiver
-		funcDecl, ok := got.Expression.Stmt.(*ast.FuncDecl)
+		funcDecl, ok := got.Expression.AstNode.(*ast.FuncDecl)
 		if !ok {
-			t.Fatalf("expected *ast.FuncDecl, got %T", got.Expression.Stmt)
+			t.Fatalf("expected *ast.FuncDecl, got %T", got.Expression.AstNode)
 		}
 		if funcDecl.Name.Name != "Validate" {
 			t.Errorf("expected method name 'Validate', got %q", funcDecl.Name.Name)

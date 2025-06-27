@@ -11,6 +11,7 @@ import (
 // Declaration  = ConstDecl | TypeDecl | VarDecl .
 // TopLevelDecl = Declaration | FunctionDecl | MethodDecl .
 
+// TODO: use goexpression/parse.go to parse this into an ast.Node
 var goCommentParser = parse.Func(func(pi *parse.Input) (n *TemplateFileGoExpression, ok bool, err error) {
 	start := pi.Position()
 

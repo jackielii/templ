@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"go/ast"
 	"strings"
 
 	"github.com/a-h/parse"
@@ -20,7 +21,7 @@ func parseGoFuncSigature(prefix string, pi *parse.Input) (name string, expressio
 	pi.Take(len(prefix) + len(expr))
 	to := pi.Position()
 	expression = NewExpression(expr, pi.PositionAt(from+len(prefix)), to)
-	expression.Stmt = funcDecl
+	expression.AstNode = funcDecl
 	return name, expression, nil
 }
 
@@ -57,7 +58,7 @@ func peekPrefix(pi *parse.Input, prefixes ...string) bool {
 	return false
 }
 
-type extractor func(content string) (start, end int, stmt any, err error)
+type extractor func(content string) (start, end int, stmt ast.Node, err error)
 
 func parseGo(name string, pi *parse.Input, e extractor) (r Expression, err error) {
 	from := pi.Index()
@@ -69,6 +70,6 @@ func parseGo(name string, pi *parse.Input, e extractor) (r Expression, err error
 	expr := src[start:end]
 	pi.Take(end)
 	r = NewExpression(expr, pi.PositionAt(from+start), pi.PositionAt(from+end))
-	r.Stmt = stmt
+	r.AstNode = stmt
 	return r, nil
 }

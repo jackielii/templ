@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/ast"
 	"go/format"
 	"io"
 	"strings"
@@ -114,9 +115,9 @@ func (r Range) String() string {
 
 // Expression containing Go code.
 type Expression struct {
-	Value string
-	Range Range
-	Stmt  any // The AST node for the expression, if available.
+	Value   string
+	Range   Range
+	AstNode ast.Node // The AST node for the expression, if available.
 }
 
 type TemplateFile struct {
