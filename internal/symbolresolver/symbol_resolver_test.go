@@ -132,7 +132,6 @@ templ EmptyComponent() {
 			}
 
 			// Parse and preprocess the main template file
-			tf := env.parseTemplFile(t, tt.templFile)
 			templPath := env.writeFile(t, "test.templ", tt.templFile)
 
 			// Preprocess to generate overlays
@@ -140,8 +139,14 @@ templ EmptyComponent() {
 				t.Fatalf("PreprocessFiles failed: %v", err)
 			}
 
+			// Parse component name as expression
+			expr, parseErr := parser.ParseExpr(tt.componentName)
+			if parseErr != nil {
+				t.Fatalf("Failed to parse component name %q: %v", tt.componentName, parseErr)
+			}
+
 			// Resolve the component
-			sig, err := env.resolver.ResolveComponent(env.dir, tt.componentName, tf)
+			sig, err := env.resolver.ResolveComponent(templPath, expr)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ResolveComponent() error = %v, wantErr %v", err, tt.wantErr)
 				return

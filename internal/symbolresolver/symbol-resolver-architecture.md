@@ -121,3 +121,17 @@ Element component use the HTML element syntax but it accepts any valid Go expres
 6. `<myValue>...</myValue>` - A value of a type that implements the `templ.Component` interface. I.e. has a method `func (s *myType) Render(context.Context, w io.Writer) error`. In addition, if this value is a struct value, we also support populating its fields with the attributes.
 
 For lowercase tags, we can try to resolve it locally first and if it fails, we'll assume it's a plain HTML tag and not a templ component.
+
+### Unified Expression Resolution
+
+The symbol resolver treats components as expressions, which simplifies the implementation:
+
+- **ResolveComponent** accepts an `ast.Expr` instead of a string, ensuring parsing happens at the parser level
+- **ResolveExpression** handles all Go expression types uniformly
+- Component resolution uses the same expression resolution logic internally
+- File-scoped imports are properly handled by using both file scope (for imports) and package scope (for declarations)
+
+**Key Implementation Detail**: Since Go imports are file-scoped, not package-scoped, the resolver must use the appropriate file's scope when resolving package-qualified identifiers (e.g., `pkg.Component`). This is achieved by:
+1. Finding the overlay file that corresponds to the source templ file
+2. Using that file's scope for import resolution
+3. Falling back to package scope for local identifier resolution

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	templparser "github.com/a-h/templ/parser/v2"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -184,22 +183,26 @@ func TestIntegration_GeneratorDirectory(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Get the template file for the fromDir
-			var tf *templparser.TemplateFile
+
+			// Parse component name as expression
+			expr, parseErr := parser.ParseExpr(tc.componentName)
+			if parseErr != nil {
+				t.Fatalf("Failed to parse component name %q: %v", tc.componentName, parseErr)
+			}
+
+			// Find a templ file in the fromDir to use as the source file
+			var templFile string
 			for _, file := range templFiles {
 				if filepath.Dir(file) == tc.fromDir {
-					parsedTf, err := templparser.Parse(file)
-					if err == nil {
-						tf = parsedTf
-						break
-					}
+					templFile = file
+					break
 				}
 			}
-			if tf == nil && !tc.shouldFail {
+			if templFile == "" && !tc.shouldFail {
 				t.Skip("No template file found for directory")
 			}
 
-			sig, err := resolver.ResolveComponent(tc.fromDir, tc.componentName, tf)
+			sig, err := resolver.ResolveComponent(templFile, expr)
 
 			if tc.shouldFail {
 				if err == nil {

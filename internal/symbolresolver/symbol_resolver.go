@@ -202,86 +202,136 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 
 // ResolveComponent finds a component's type signature
 // Called during code generation for element syntax like <Button />
-func (r *SymbolResolverV2) ResolveComponent(fromDir, componentName string, tf *parser.TemplateFile) (*types.Signature, error) {
-	var pkgPath string
-	var localName string
-
-	// Check if component is imported (e.g., pkg.Component)
-	if strings.Contains(componentName, ".") {
-		parts := strings.SplitN(componentName, ".", 2)
-		alias := parts[0]
-		localName = parts[1]
-
-		// Find the import path for this alias
-		pkgPath = r.findImportPath(tf, alias)
-		if pkgPath == "" {
-			return nil, fmt.Errorf("import alias %s not found", alias)
-		}
-	} else {
-		// Local component
-		localName = componentName
+func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (*types.Signature, error) {
+	// Get the absolute path of the file
+	absFromFile, err := filepath.Abs(fromFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path for %s: %w", fromFile, err)
 	}
 
-	// Load the package from cache
-	var pkg *packages.Package
-	if pkgPath != "" {
-		// Load by package path
-		if p, ok := r.packages[pkgPath]; ok {
-			pkg = p
-		} else {
-			return nil, fmt.Errorf("package %s not found in preprocessing cache", pkgPath)
-		}
-	} else {
-		// Load local package from cache
-		// Convert to absolute path to match our cache keys
-		absFromDir, err := filepath.Abs(fromDir)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get absolute path for %s: %w", fromDir, err)
-		}
+	// Get the directory for package lookup
+	fromDir := filepath.Dir(absFromFile)
+	
+	pkg, ok := r.packages[fromDir]
+	if !ok {
+		return nil, fmt.Errorf("package in %s not found in preprocessing cache", fromDir)
+	}
 
-		if p, ok := r.packages[absFromDir]; ok {
-			pkg = p
-		} else {
-			return nil, fmt.Errorf("local package in %s not found in preprocessing cache", fromDir)
+	if pkg.TypesInfo == nil {
+		return nil, fmt.Errorf("no type information for package in %s", fromDir)
+	}
+
+	// Find the file scope that includes imports
+	// Look for the overlay file that corresponds to this templ file
+	overlayPath := strings.TrimSuffix(absFromFile, ".templ") + "_templ.go"
+	
+	var fileScope *types.Scope
+	// fmt.Printf("Looking for overlay: %s\n", overlayPath)
+	// fmt.Printf("CompiledGoFiles: %v\n", pkg.CompiledGoFiles)
+	for i, file := range pkg.CompiledGoFiles {
+		if file == overlayPath && i < len(pkg.Syntax) {
+			// Found the overlay file - get its scope
+			if pkg.TypesInfo != nil && pkg.TypesInfo.Scopes != nil {
+				// The file scope is at the file level, not the package level
+				// pkg.Syntax[i] is already an *ast.File
+				fileNode := pkg.Syntax[i]
+				fileScope = pkg.TypesInfo.Scopes[fileNode]
+				// fmt.Printf("Found file scope for %s\n", overlayPath)
+				// if fileScope != nil {
+				// 	fmt.Printf("File scope names: %v\n", fileScope.Names())
+				// }
+			}
+			break
 		}
 	}
 
-	// Find the component in the package
-	if pkg.Types == nil {
-		return nil, fmt.Errorf("no type information for package %s (ID: %s)", pkg.PkgPath, pkg.ID)
+	// If we couldn't find a file-specific scope, use the package scope
+	if fileScope == nil {
+		// fmt.Printf("Using package scope as fallback\n")
+		fileScope = pkg.Types.Scope()
+		// if fileScope != nil {
+		// 	fmt.Printf("Package scope names: %v\n", fileScope.Names())
+		// }
 	}
 
-	if pkg.Types.Scope() == nil {
-		return nil, fmt.Errorf("package %s has no scope (ID: %s)", pkg.PkgPath, pkg.ID)
+	// Use ResolveExpression to get the type
+	// Pass both file scope (for imports) and package scope (for declarations)
+	typ, err := r.ResolveComponentExpression(expr, fileScope, pkg.Types.Scope())
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve component expression: %w", err)
 	}
 
-	obj := pkg.Types.Scope().Lookup(localName)
-	if obj == nil {
-		// Try to provide more helpful error message
-		availableNames := pkg.Types.Scope().Names()
-		if len(availableNames) == 0 {
-			return nil, fmt.Errorf("component %s not found in package %s - package scope is empty", localName, pkg.PkgPath)
+	// Extract component signature from the resolved type
+	return r.extractComponentSignature(typ)
+}
+
+// ResolveComponentExpression resolves a component expression using both file and package scopes
+func (r *SymbolResolverV2) ResolveComponentExpression(expr ast.Expr, fileScope, pkgScope *types.Scope) (types.Type, error) {
+	// For simple identifiers, check package scope first
+	if ident, ok := expr.(*ast.Ident); ok {
+		// First check in package scope (for local components)
+		if obj := pkgScope.Lookup(ident.Name); obj != nil {
+			return obj.Type(), nil
 		}
-		return nil, fmt.Errorf("component %s not found in package %s (available: %v)", localName, pkg.PkgPath, availableNames)
+		// Then check in file scope (shouldn't happen for components, but be thorough)
+		if fileScope != nil {
+			if obj := fileScope.Lookup(ident.Name); obj != nil {
+				return obj.Type(), nil
+			}
+		}
+		return nil, fmt.Errorf("identifier %s not found in scope", ident.Name)
 	}
+	
+	// For selector expressions, we need to check if it's a package import
+	if sel, ok := expr.(*ast.SelectorExpr); ok {
+		if ident, ok := sel.X.(*ast.Ident); ok {
+			// Check if this is an imported package in file scope
+			if fileScope != nil {
+				if obj := fileScope.Lookup(ident.Name); obj != nil {
+					if pkgName, ok := obj.(*types.PkgName); ok {
+						// Look up the component in the imported package
+						importedPkg := pkgName.Imported()
+						if importedPkg == nil {
+							return nil, fmt.Errorf("imported package %s not found", ident.Name)
+						}
+						obj := importedPkg.Scope().Lookup(sel.Sel.Name)
+						if obj == nil {
+							return nil, fmt.Errorf("%s not found in package %s", sel.Sel.Name, ident.Name)
+						}
+						return obj.Type(), nil
+					}
+				}
+			}
+		}
+	}
+	
+	// For other expressions, use the regular ResolveExpression with package scope
+	return r.ResolveExpression(expr, pkgScope)
+}
 
-	// Extract signature
-	switch obj := obj.(type) {
-	case *types.Func:
-		// Function component
-		return obj.Type().(*types.Signature), nil
-	case *types.TypeName:
-		// Struct component - look for Render method
-		method, _, _ := types.LookupFieldOrMethod(obj.Type(), true, pkg.Types, "Render")
+// extractComponentSignature extracts a component signature from a type
+func (r *SymbolResolverV2) extractComponentSignature(typ types.Type) (*types.Signature, error) {
+	switch t := typ.(type) {
+	case *types.Signature:
+		// Direct function type
+		return t, nil
+	case *types.Named:
+		// Named type - look for Render method (struct implementing templ.Component)
+		method, _, _ := types.LookupFieldOrMethod(t, true, nil, "Render")
 		if method == nil {
-			return nil, fmt.Errorf("%s does not implement templ.Component", localName)
+			return nil, fmt.Errorf("type %s does not implement templ.Component (no Render method)", t)
 		}
 		if fn, ok := method.(*types.Func); ok {
 			return fn.Type().(*types.Signature), nil
 		}
+		return nil, fmt.Errorf("Render is not a method on %s", t)
+	default:
+		// Check if it's a variable of a type that implements templ.Component
+		if named, ok := typ.Underlying().(*types.Named); ok {
+			return r.extractComponentSignature(named)
+		}
+		return nil, fmt.Errorf("type %s is not a valid component (not a function or type implementing templ.Component)", typ)
 	}
-
-	return nil, fmt.Errorf("%s is not a valid component", componentName)
 }
 
 // ResolveExpression determines the type of a Go expression
@@ -305,8 +355,32 @@ func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, scope *types.Scope) 
 		return obj.Type(), nil
 
 	case *ast.SelectorExpr:
-		// Field or method access (e.g., user.Name)
-		// First resolve the base expression
+		// This could be either:
+		// 1. Package-qualified identifier (e.g., pkg.Component)
+		// 2. Field or method access (e.g., user.Name)
+		
+		// Check if X is an identifier - might be a package name
+		if ident, ok := e.X.(*ast.Ident); ok {
+			// Try to find it as a package first
+			obj := scope.Lookup(ident.Name)
+			if obj != nil && obj.Type() == nil {
+				// This is likely a package name (imported package)
+				if pkgName, ok := obj.(*types.PkgName); ok {
+					// Look up the identifier in the imported package
+					importedPkg := pkgName.Imported()
+					if importedPkg == nil {
+						return nil, fmt.Errorf("imported package %s not found", ident.Name)
+					}
+					obj := importedPkg.Scope().Lookup(e.Sel.Name)
+					if obj == nil {
+						return nil, fmt.Errorf("%s not found in package %s", e.Sel.Name, ident.Name)
+					}
+					return obj.Type(), nil
+				}
+			}
+		}
+		
+		// Not a package - resolve as field/method access
 		baseType, err := r.ResolveExpression(e.X, scope)
 		if err != nil {
 			return nil, err
@@ -380,35 +454,6 @@ func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, scope *types.Scope) 
 	}
 }
 
-// findImportPath finds the import path for a given alias in the template file
-func (r *SymbolResolverV2) findImportPath(tf *parser.TemplateFile, alias string) string {
-	for _, node := range tf.Nodes {
-		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
-			if goExpr.Expression.AstNode != nil {
-				if genDecl, ok := goExpr.Expression.AstNode.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
-					for _, spec := range genDecl.Specs {
-						if impSpec, ok := spec.(*ast.ImportSpec); ok {
-							// Check if this import has the alias we're looking for
-							var importAlias string
-							if impSpec.Name != nil {
-								importAlias = impSpec.Name.Name
-							} else {
-								// Default alias is the last part of the path
-								path := strings.Trim(impSpec.Path.Value, `"`)
-								parts := strings.Split(path, "/")
-								importAlias = parts[len(parts)-1]
-							}
-							if importAlias == alias {
-								return strings.Trim(impSpec.Path.Value, `"`)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
 
 // generateOverlay creates a Go stub file for a templ template
 func (r *SymbolResolverV2) generateOverlay(tf *parser.TemplateFile) (string, error) {
