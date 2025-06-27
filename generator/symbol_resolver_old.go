@@ -1289,12 +1289,12 @@ func extractForLoopVariables(expr parser.Expression) map[string]*symbolTypeInfo 
 	vars := make(map[string]*symbolTypeInfo)
 
 	// Check if we have an AST node
-	if expr.Stmt == nil {
+	if expr.AstNode == nil {
 		// Fallback to simple heuristics if no AST
 		return extractForLoopVariablesFallback(expr.Value)
 	}
 
-	switch stmt := expr.Stmt.(type) {
+	switch stmt := expr.AstNode.(type) {
 	case *ast.RangeStmt:
 		// Handle "for key, value := range expr" pattern
 		if stmt.Key != nil {
@@ -1387,12 +1387,12 @@ func extractIfConditionVariables(expr parser.Expression) map[string]*symbolTypeI
 	vars := make(map[string]*symbolTypeInfo)
 
 	// Check if we have an AST node
-	if expr.Stmt == nil {
+	if expr.AstNode == nil {
 		// Fallback to simple heuristics if no AST
 		return extractIfConditionVariablesFallback(expr.Value)
 	}
 
-	if ifStmt, ok := expr.Stmt.(*ast.IfStmt); ok {
+	if ifStmt, ok := expr.AstNode.(*ast.IfStmt); ok {
 		// Check if there's an Init statement (e.g., "if x := expr; condition")
 		if ifStmt.Init != nil {
 			if assignStmt, ok := ifStmt.Init.(*ast.AssignStmt); ok {
