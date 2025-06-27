@@ -31,22 +31,29 @@ The single-call approach allows the Go packages system to optimize dependency re
 
 ### Correct LoadMode Configuration
 
-**CRITICAL**: Due to known bugs in `golang.org/x/tools/go/packages`, certain LoadMode combinations must be used together:
+**RECOMMENDED**: Use the predefined `packages.LoadSyntax` constant for optimal performance and correctness:
 
 ```go
 cfg := &packages.Config{
-    Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
-          packages.NeedImports | packages.NeedDeps | packages.NeedTypes |
-          packages.NeedTypesInfo | packages.NeedSyntax,
-    Dir:     baseDir,
+    Mode:    packages.LoadSyntax,
+    Dir:     moduleRoot,
     Overlay: overlays,
 }
 ```
 
-Key requirements:
-- **NeedTypesInfo requires NeedTypes**: Using NeedTypesInfo alone will result in nil TypesInfo
-- **NeedCompiledGoFiles**: Required to get overlay files in the package
-- **NeedDeps**: Required for cross-package resolution
+`LoadSyntax` is equivalent to:
+```go
+LoadSyntax = LoadTypes | NeedSyntax | NeedTypesInfo
+// Which expands to:
+// LoadTypes = LoadImports | NeedTypes | NeedTypesSizes
+// LoadImports = LoadFiles | NeedImports
+// LoadFiles = NeedName | NeedFiles | NeedCompiledGoFiles
+```
+
+Key points:
+- **NeedTypesInfo requires NeedTypes**: Using NeedTypesInfo alone will result in nil TypesInfo (known bug)
+- **NeedDeps is NOT required**: Dependencies are automatically loaded as needed for type checking
+- **Performance**: Using LoadSyntax without NeedDeps is ~5x faster than LoadAllSyntax
 
 ### Package Caching Strategy
 
@@ -99,6 +106,8 @@ This approach ensures:
 - Overlays work correctly within each module
 - Type information is properly populated
 - Cross-module references can still be resolved through the package cache
+
+**Module Loading Order**: The order in which modules are loaded does not matter. Each `packages.Load` call independently resolves all necessary dependencies within that module's context. Cross-module references are resolved later through the global package cache during symbol resolution.
 
 ### Element component
 

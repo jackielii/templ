@@ -50,7 +50,7 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 		}
 
 		// Find the module root for this file
-		moduleRoot := r.findModuleRoot(filepath.Dir(file))
+		moduleRoot := findModuleRoot(filepath.Dir(file))
 		moduleFiles[moduleRoot] = append(moduleFiles[moduleRoot], file)
 	}
 
@@ -59,6 +59,7 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 		if !strings.HasSuffix(file, ".templ") {
 			continue // Only process templ files
 		}
+
 		// Parse the template file
 		tf, err := parser.Parse(file)
 		if err != nil {
@@ -93,17 +94,6 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 	}
 
 	return nil
-}
-
-// findModuleRoot finds the go.mod file for a given directory
-func (r *SymbolResolverV2) findModuleRoot(dir string) string {
-	for current := dir; current != "/" && current != ""; current = filepath.Dir(current) {
-		if _, err := os.Stat(filepath.Join(current, "go.mod")); err == nil {
-			return current
-		}
-	}
-	// If no go.mod found, return the original directory
-	return dir
 }
 
 // loadPackagesForModule loads all packages within a single module
@@ -163,7 +153,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 				}
 			}
 			if hasRealError {
-				// fmt.Printf("    Skipping due to errors: %v\n", pkg.Errors)
+				fmt.Printf("    Skipping due to errors: %v\n", pkg.Errors)
 				return // Skip this package
 			}
 		}
@@ -198,7 +188,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 	})
 
 	// Now cache packages by the directories where we found templ files
-	for dir, templFiles := range packageDirs {
+	for dir := range packageDirs {
 		// Find which package this directory belongs to
 		found := false
 		for pkgPath, dirs := range pkgToDirs {
@@ -216,33 +206,11 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 			}
 		}
 
-		// If we still haven't found a package for this directory,
-		// it might be a package with only templ files
+		// If we still can't find a package, it might be due to edge cases
+		// in how packages.Load reports directory mappings
 		if !found {
-			// Try to find by matching the package pattern
-			relPath, err := filepath.Rel(moduleRoot, dir)
-			if err == nil {
-				pattern := "./" + relPath
-				// Look through all loaded packages for a match
-				for _, pkg := range pkgs {
-					if pkg.ID == pattern {
-						r.packages[dir] = pkg
-						if pkg.PkgPath != "" {
-							r.packages[pkg.PkgPath] = pkg
-						}
-						found = true
-						break
-					}
-					// Also check if the package path ends with our relative path
-					if pkg.PkgPath != "" && strings.HasSuffix(pkg.PkgPath, "/"+relPath) {
-						r.packages[dir] = pkg
-						found = true
-						break
-					}
-				}
-			}
+			fmt.Printf("Warning: could not find package for directory %s\n", dir)
 		}
-		_ = templFiles // avoid unused variable warning
 	}
 
 	return nil
@@ -603,4 +571,15 @@ func (r *SymbolResolverV2) generateOverlay(tf *parser.TemplateFile) (string, err
 	sb.WriteString(bodySection.String())
 
 	return sb.String(), nil
+}
+
+// findModuleRoot finds the go.mod file for a given directory
+func findModuleRoot(dir string) string {
+	for current := dir; current != "/" && current != ""; current = filepath.Dir(current) {
+		if _, err := os.Stat(filepath.Join(current, "go.mod")); err == nil {
+			return current
+		}
+	}
+	// If no go.mod found, return the original directory
+	return dir
 }
