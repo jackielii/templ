@@ -264,6 +264,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	goModContent := `module testmod
 
 go 1.23
+
+require github.com/a-h/templ v0.0.0
+
+replace github.com/a-h/templ => ` + filepath.Join("..", "..", "..") + `
 `
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goModContent), 0o644); err != nil {
 		t.Fatalf("failed to create go.mod: %v", err)
@@ -384,7 +388,7 @@ templ ProgressBar(progress int) {
 			env := newTestEnv(t)
 			tf := env.parseTemplFile(t, tt.templContent)
 
-			overlay, err := env.resolver.generateOverlay(tf, "test.templ")
+			overlay, err := env.resolver.generateOverlay(tf)
 			if err != nil {
 				t.Fatalf("GenerateOverlay failed: %v", err)
 			}

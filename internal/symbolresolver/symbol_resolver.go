@@ -38,6 +38,9 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 
 	// Parse each file and generate overlays
 	for _, file := range files {
+		if !strings.HasSuffix(file, ".templ") {
+			continue // Only process templ files
+		}
 		// Parse the template file
 		tf, err := parser.Parse(file)
 		if err != nil {
@@ -50,17 +53,79 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 			return fmt.Errorf("failed to generate overlay for %s: %w", file, err)
 		}
 
-		// Store overlay with _templ.go suffix
+		// Store overlay with _templ.go suffix (use absolute path)
 		overlayPath := strings.TrimSuffix(file, ".templ") + "_templ.go"
-		r.overlays[overlayPath] = []byte(overlay)
+		absOverlayPath, err := filepath.Abs(overlayPath)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path for overlay: %w", err)
+		}
+		r.overlays[absOverlayPath] = []byte(overlay)
 	}
 
-	// Load packages with overlays
+	// Load all packages at once with overlays
+	// Due to https://github.com/golang/go/issues/56633, NeedDeps doesn't properly
+	// load dependencies that are only available via overlay. We need to load all
+	// packages together to ensure overlays are visible across package boundaries.
+	var patterns []string
 	for dir := range packageDirs {
-		if _, err := r.LoadPackage(dir); err != nil {
-			// Log warning but continue - some packages might have issues
-			// fmt.Printf("Warning: failed to load package in %s: %v\n", dir, err)
+		patterns = append(patterns, dir)
+	}
+	
+	if len(patterns) > 0 {
+		cfg := &packages.Config{
+			Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo |
+				packages.NeedSyntax | packages.NeedImports | packages.NeedDeps,
+			Overlay: r.overlays,
 		}
+		
+		pkgs, err := packages.Load(cfg, patterns...)
+		if err != nil {
+			return fmt.Errorf("failed to load packages: %w", err)
+		}
+		
+		// Process all loaded packages
+		packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+			// Skip packages with certain errors
+			if len(pkg.Errors) > 0 {
+				hasRealError := false
+				for _, err := range pkg.Errors {
+					errStr := err.Error()
+					if !strings.Contains(errStr, "_templ.go") && !strings.Contains(errStr, "no Go files") {
+						hasRealError = true
+						break
+					}
+				}
+				if hasRealError {
+					return // Skip this package
+				}
+			}
+			
+			// Cache by directory if it's one of our directories
+			for dir := range packageDirs {
+				absDir, _ := filepath.Abs(dir)
+				if len(pkg.GoFiles) > 0 {
+					pkgDir := filepath.Dir(pkg.GoFiles[0])
+					if pkgDir == absDir {
+						r.packages[dir] = pkg
+						break
+					}
+				}
+			}
+			
+			// Also cache by package path
+			if pkg.PkgPath != "" {
+				r.packages[pkg.PkgPath] = pkg
+			}
+		})
+	}
+
+	// Also ensure templ package is available in cache
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo,
+	}
+	templPkgs, err := packages.Load(cfg, "github.com/a-h/templ")
+	if err == nil && len(templPkgs) > 0 {
+		r.packages["github.com/a-h/templ"] = templPkgs[0]
 	}
 
 	return nil
@@ -96,11 +161,23 @@ func (r *SymbolResolverV2) ResolveComponent(fromDir, componentName string, tf *p
 		if p, ok := r.packages[pkgPath]; ok {
 			pkg = p
 		} else {
-			return nil, fmt.Errorf("package %s not loaded", pkgPath)
+			// Try to load the package by import path
+			cfg := &packages.Config{
+				Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo |
+					packages.NeedSyntax | packages.NeedImports | packages.NeedDeps,
+				Overlay: r.overlays,
+			}
+			pkgs, err := packages.Load(cfg, pkgPath)
+			if err != nil || len(pkgs) == 0 {
+				return nil, fmt.Errorf("package %s not loaded", pkgPath)
+			}
+			pkg = pkgs[0]
+			// Cache it
+			r.packages[pkgPath] = pkg
 		}
 	} else {
 		// Load local package
-		pkg, err = r.LoadPackage(fromDir)
+		pkg, err = r.loadPackage(fromDir)
 		if err != nil {
 			return nil, err
 		}
@@ -261,8 +338,8 @@ func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, scope *types.Scope) 
 	}
 }
 
-// LoadPackage loads a package with type information
-func (r *SymbolResolverV2) LoadPackage(dir string) (*packages.Package, error) {
+// loadPackage loads a package with type information
+func (r *SymbolResolverV2) loadPackage(dir string) (*packages.Package, error) {
 	// Check cache first
 	if pkg, ok := r.packages[dir]; ok {
 		return pkg, nil
@@ -290,11 +367,17 @@ func (r *SymbolResolverV2) LoadPackage(dir string) (*packages.Package, error) {
 
 	// Allow packages with certain types of errors (e.g., from generated files)
 	if len(pkg.Errors) > 0 {
+		hasRealError := false
 		for _, err := range pkg.Errors {
-			// Skip errors from generated _templ.go files
-			if !strings.Contains(err.Error(), "_templ.go") {
-				return nil, fmt.Errorf("package has errors: %v", pkg.Errors)
+			errStr := err.Error()
+			// Skip errors from generated _templ.go files or "no Go files" errors
+			if !strings.Contains(errStr, "_templ.go") && !strings.Contains(errStr, "no Go files") {
+				hasRealError = true
+				break
 			}
+		}
+		if hasRealError {
+			return nil, fmt.Errorf("package has errors: %v", pkg.Errors)
 		}
 	}
 
