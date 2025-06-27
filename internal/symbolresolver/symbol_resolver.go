@@ -14,8 +14,8 @@ import (
 
 // SymbolResolverV2 handles type resolution for templ templates
 type SymbolResolverV2 struct {
-	packages map[string]*packages.Package // key: package path or directory
-	overlays map[string][]byte            // key: file path -> content
+	packages map[string]*packages.Package // key: package path or absolute directory path
+	overlays map[string][]byte            // key: absolute file path -> content
 }
 
 // NewSymbolResolverV2 creates a new symbol resolver
@@ -29,15 +29,28 @@ func NewSymbolResolverV2() *SymbolResolverV2 {
 // PreprocessFiles analyzes all template files and prepares overlays
 // This is called once before any code generation begins
 func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
+	// Convert all file paths to absolute paths first
+	absFiles := make([]string, 0, len(files))
+	for _, file := range files {
+		absFile, err := filepath.Abs(file)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path for %s: %w", file, err)
+		}
+		absFiles = append(absFiles, absFile)
+	}
+
 	// Group files by directory to identify packages
 	packageDirs := make(map[string][]string)
-	for _, file := range files {
+	for _, file := range absFiles {
+		if !strings.HasSuffix(file, ".templ") {
+			continue // Only process templ files
+		}
 		dir := filepath.Dir(file)
 		packageDirs[dir] = append(packageDirs[dir], file)
 	}
 
 	// Parse each file and generate overlays
-	for _, file := range files {
+	for _, file := range absFiles {
 		if !strings.HasSuffix(file, ".templ") {
 			continue // Only process templ files
 		}
@@ -53,70 +66,63 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 			return fmt.Errorf("failed to generate overlay for %s: %w", file, err)
 		}
 
-		// Store overlay with _templ.go suffix (use absolute path)
+		// Store overlay with _templ.go suffix
 		overlayPath := strings.TrimSuffix(file, ".templ") + "_templ.go"
-		absOverlayPath, err := filepath.Abs(overlayPath)
-		if err != nil {
-			return fmt.Errorf("failed to get absolute path for overlay: %w", err)
-		}
-		r.overlays[absOverlayPath] = []byte(overlay)
+		r.overlays[overlayPath] = []byte(overlay)
 	}
 
-	// Load all packages at once with overlays
-	// Due to https://github.com/golang/go/issues/56633, NeedDeps doesn't properly
-	// load dependencies that are only available via overlay. We need to load all
-	// packages together to ensure overlays are visible across package boundaries.
-	var patterns []string
+	// Load packages from each directory separately to handle different module contexts
 	for dir := range packageDirs {
-		patterns = append(patterns, dir)
-	}
-
-	if len(patterns) > 0 {
 		cfg := &packages.Config{
 			Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo |
-				packages.NeedSyntax | packages.NeedImports | packages.NeedDeps,
+				packages.NeedSyntax | packages.NeedImports | packages.NeedDeps | packages.NeedFiles,
+			Dir:     dir,
 			Overlay: r.overlays,
 		}
 
-		pkgs, err := packages.Load(cfg, patterns...)
+		pkgs, err := packages.Load(cfg, ".")
 		if err != nil {
-			return fmt.Errorf("failed to load packages: %w", err)
+			// Log but don't fail - some directories might have issues
+			continue
 		}
 
-		// Process all loaded packages
-		packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		if len(pkgs) > 0 {
+			pkg := pkgs[0]
+
 			// Skip packages with certain errors
 			if len(pkg.Errors) > 0 {
 				hasRealError := false
 				for _, err := range pkg.Errors {
 					errStr := err.Error()
-					if !strings.Contains(errStr, "_templ.go") && !strings.Contains(errStr, "no Go files") {
+					// Allow packages with only overlay files or module boundary errors
+					if !strings.Contains(errStr, "_templ.go") &&
+						!strings.Contains(errStr, "no Go files") &&
+						!strings.Contains(errStr, "no required module provides package") &&
+						!strings.Contains(errStr, "outside main module") {
 						hasRealError = true
 						break
 					}
 				}
 				if hasRealError {
-					return // Skip this package
+					continue // Skip this package
 				}
 			}
 
-			// Cache by directory if it's one of our directories
-			for dir := range packageDirs {
-				absDir, _ := filepath.Abs(dir)
-				if len(pkg.GoFiles) > 0 {
-					pkgDir := filepath.Dir(pkg.GoFiles[0])
-					if pkgDir == absDir {
-						r.packages[dir] = pkg
-						break
-					}
-				}
-			}
+			// Cache by directory (already absolute from packageDirs)
+			r.packages[dir] = pkg
 
-			// Also cache by package path
+			// Also cache by package path if available
 			if pkg.PkgPath != "" {
 				r.packages[pkg.PkgPath] = pkg
 			}
-		})
+
+			// Process dependencies
+			packages.Visit(pkgs, nil, func(depPkg *packages.Package) {
+				if depPkg.PkgPath != "" && depPkg.PkgPath != pkg.PkgPath {
+					r.packages[depPkg.PkgPath] = depPkg
+				}
+			})
+		}
 	}
 
 	// Also ensure templ package is available in cache
@@ -153,33 +159,27 @@ func (r *SymbolResolverV2) ResolveComponent(fromDir, componentName string, tf *p
 		localName = componentName
 	}
 
-	// Load the package
+	// Load the package from cache
 	var pkg *packages.Package
-	var err error
 	if pkgPath != "" {
 		// Load by package path
 		if p, ok := r.packages[pkgPath]; ok {
 			pkg = p
 		} else {
-			// Try to load the package by import path
-			cfg := &packages.Config{
-				Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo |
-					packages.NeedSyntax | packages.NeedImports | packages.NeedDeps,
-				Overlay: r.overlays,
-			}
-			pkgs, err := packages.Load(cfg, pkgPath)
-			if err != nil || len(pkgs) == 0 {
-				return nil, fmt.Errorf("package %s not loaded", pkgPath)
-			}
-			pkg = pkgs[0]
-			// Cache it
-			r.packages[pkgPath] = pkg
+			return nil, fmt.Errorf("package %s not found in preprocessing cache", pkgPath)
 		}
 	} else {
-		// Load local package
-		pkg, err = r.loadPackage(fromDir)
+		// Load local package from cache
+		// Convert to absolute path to match our cache keys
+		absFromDir, err := filepath.Abs(fromDir)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get absolute path for %s: %w", fromDir, err)
+		}
+
+		if p, ok := r.packages[absFromDir]; ok {
+			pkg = p
+		} else {
+			return nil, fmt.Errorf("local package in %s not found in preprocessing cache", fromDir)
 		}
 	}
 
@@ -338,59 +338,6 @@ func (r *SymbolResolverV2) findImportPath(tf *parser.TemplateFile, alias string)
 	return ""
 }
 
-// loadPackage loads a package with type information
-func (r *SymbolResolverV2) loadPackage(dir string) (*packages.Package, error) {
-	// Check cache first
-	if pkg, ok := r.packages[dir]; ok {
-		return pkg, nil
-	}
-
-	// Configure package loading with overlays
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo |
-			packages.NeedSyntax | packages.NeedImports | packages.NeedDeps,
-		Dir:     dir,
-		Overlay: r.overlays,
-	}
-
-	// Load the package
-	pkgs, err := packages.Load(cfg, ".")
-	if err != nil {
-		return nil, fmt.Errorf("failed to load package: %w", err)
-	}
-
-	if len(pkgs) == 0 {
-		return nil, fmt.Errorf("no packages found in %s", dir)
-	}
-
-	pkg := pkgs[0]
-
-	// Allow packages with certain types of errors (e.g., from generated files)
-	if len(pkg.Errors) > 0 {
-		hasRealError := false
-		for _, err := range pkg.Errors {
-			errStr := err.Error()
-			// Skip errors from generated _templ.go files or "no Go files" errors
-			if !strings.Contains(errStr, "_templ.go") && !strings.Contains(errStr, "no Go files") {
-				hasRealError = true
-				break
-			}
-		}
-		if hasRealError {
-			return nil, fmt.Errorf("package has errors: %v", pkg.Errors)
-		}
-	}
-
-	// Cache the result
-	r.packages[dir] = pkg
-	// Also cache by package path for cross-package lookups
-	if pkg.PkgPath != "" {
-		r.packages[pkg.PkgPath] = pkg
-	}
-
-	return pkg, nil
-}
-
 // generateOverlay creates a Go stub file for a templ template
 func (r *SymbolResolverV2) generateOverlay(tf *parser.TemplateFile) (string, error) {
 	if tf == nil {
@@ -420,9 +367,20 @@ func (r *SymbolResolverV2) generateOverlay(tf *parser.TemplateFile) (string, err
 	for _, node := range tf.Nodes {
 		switch n := node.(type) {
 		case *parser.TemplateFileGoExpression:
-			// Check if this is an import declaration
-			if n.Expression.Stmt != nil {
-				if genDecl, ok := n.Expression.Stmt.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
+			// Comments don't have Stmt, just include them as-is
+			if n.Expression.Stmt == nil {
+				// This is likely a comment
+				if strings.HasPrefix(strings.TrimSpace(n.Expression.Value), "//") || strings.HasPrefix(strings.TrimSpace(n.Expression.Value), "/*") {
+					bodySection.WriteString(n.Expression.Value)
+					bodySection.WriteString("\n")
+					continue
+				}
+				// If it's not a comment and has no Stmt, that's a parser error
+				return "", fmt.Errorf("parser error: TemplateFileGoExpression has no Stmt for non-comment: %s", n.Expression.Value)
+			}
+			if genDecl, ok := n.Expression.Stmt.(*ast.GenDecl); ok {
+				switch genDecl.Tok {
+				case token.IMPORT:
 					imports = append(imports, genDecl)
 					// Check if templ is imported
 					for _, spec := range genDecl.Specs {
@@ -432,20 +390,16 @@ func (r *SymbolResolverV2) generateOverlay(tf *parser.TemplateFile) (string, err
 							}
 						}
 					}
-				} else if genDecl, ok := n.Expression.Stmt.(*ast.GenDecl); ok && genDecl.Tok == token.TYPE {
-					// Include type definitions
+				case token.TYPE, token.VAR, token.CONST:
+					// Include type, var, and const definitions
 					bodySection.WriteString(n.Expression.Value)
 					bodySection.WriteString("\n\n")
 				}
-			} else if strings.Contains(n.Expression.Value, "type ") {
-				// Fallback for type definitions without AST
+			} else if funcDecl, ok := n.Expression.Stmt.(*ast.FuncDecl); ok {
+				// Include function declarations (non-template functions)
+				_ = funcDecl // avoid unused variable warning
 				bodySection.WriteString(n.Expression.Value)
 				bodySection.WriteString("\n\n")
-			} else if strings.Contains(n.Expression.Value, "import") && len(imports) == 0 {
-				// Fallback for imports without AST (shouldn't happen normally)
-				imports = append(imports, &ast.GenDecl{
-					Tok: token.IMPORT,
-				})
 			}
 
 		case *parser.HTMLTemplate:

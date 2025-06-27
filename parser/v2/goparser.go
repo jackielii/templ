@@ -8,7 +8,7 @@ import (
 	"github.com/a-h/templ/parser/v2/goexpression"
 )
 
-func parseGoFuncDecl(prefix string, pi *parse.Input) (name string, expression Expression, err error) {
+func parseGoFuncSigature(prefix string, pi *parse.Input) (name string, expression Expression, err error) {
 	prefix = prefix + " "
 	from := pi.Index()
 	src, _ := pi.Peek(-1)
@@ -25,11 +25,11 @@ func parseGoFuncDecl(prefix string, pi *parse.Input) (name string, expression Ex
 }
 
 func parseTemplFuncDecl(pi *parse.Input) (name string, expression Expression, err error) {
-	return parseGoFuncDecl("templ", pi)
+	return parseGoFuncSigature("templ", pi)
 }
 
 func parseCSSFuncDecl(pi *parse.Input) (name string, expression Expression, err error) {
-	return parseGoFuncDecl("css", pi)
+	return parseGoFuncSigature("css", pi)
 }
 
 func parseGoSliceArgs(pi *parse.Input) (r Expression, err error) {
