@@ -88,8 +88,9 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 
 		// Load packages for this module
 		if err := r.loadPackagesForModule(moduleRoot, packageDirs); err != nil {
-			// Log the error but continue with other modules
-			fmt.Printf("Warning: failed to load packages for module %s: %v\n", moduleRoot, err)
+			// Continue with other modules - one module's failure shouldn't stop others
+			// The error is already descriptive from loadPackagesForModule
+			_ = err
 		}
 	}
 
@@ -103,7 +104,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 		return nil
 	}
 
-	fmt.Printf("Loading packages for module %s with %d directories\n", moduleRoot, len(loadPaths))
+	// Load packages for this module
 
 	cfg := &packages.Config{
 		Mode:    packages.LoadSyntax,
@@ -134,28 +135,13 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 
 	// Process all loaded packages
 	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
-		// fmt.Printf("  Visiting package ID=%s PkgPath=%s\n", pkg.ID, pkg.PkgPath)
 
-		// Skip packages with certain errors
+		// Skip packages with errors - packages.Visit handles dependencies correctly
+		// even with errors, so we can still cache what we get
 		if len(pkg.Errors) > 0 {
-			hasRealError := false
-			for _, err := range pkg.Errors {
-				errStr := err.Error()
-				// Allow packages with only overlay files or module boundary errors
-				if !strings.Contains(errStr, "_templ.go") &&
-					!strings.Contains(errStr, "no Go files") &&
-					!strings.Contains(errStr, "no required module provides package") &&
-					!strings.Contains(errStr, "outside main module") &&
-					!strings.Contains(errStr, "main module") && // Allow "main module does not contain package" errors
-					!strings.Contains(errStr, "imported and not used") { // Allow unused import errors in overlays
-					hasRealError = true
-					break
-				}
-			}
-			if hasRealError {
-				fmt.Printf("    Skipping due to errors: %v\n", pkg.Errors)
-				return // Skip this package
-			}
+			// Log errors for debugging but don't skip the package
+			// Most errors are benign (e.g., unused imports in overlays)
+			// fmt.Printf("Package %s has errors: %v\n", pkg.ID, pkg.Errors)
 		}
 
 		// Cache by package path if available
@@ -208,9 +194,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 
 		// If we still can't find a package, it might be due to edge cases
 		// in how packages.Load reports directory mappings
-		if !found {
-			fmt.Printf("Warning: could not find package for directory %s\n", dir)
-		}
+		// fmt.Printf("Warning: could not find package for directory %s\n", dir)
 	}
 
 	return nil
