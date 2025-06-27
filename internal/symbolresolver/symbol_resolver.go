@@ -70,19 +70,19 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 	for dir := range packageDirs {
 		patterns = append(patterns, dir)
 	}
-	
+
 	if len(patterns) > 0 {
 		cfg := &packages.Config{
 			Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo |
 				packages.NeedSyntax | packages.NeedImports | packages.NeedDeps,
 			Overlay: r.overlays,
 		}
-		
+
 		pkgs, err := packages.Load(cfg, patterns...)
 		if err != nil {
 			return fmt.Errorf("failed to load packages: %w", err)
 		}
-		
+
 		// Process all loaded packages
 		packages.Visit(pkgs, nil, func(pkg *packages.Package) {
 			// Skip packages with certain errors
@@ -99,7 +99,7 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 					return // Skip this package
 				}
 			}
-			
+
 			// Cache by directory if it's one of our directories
 			for dir := range packageDirs {
 				absDir, _ := filepath.Abs(dir)
@@ -111,7 +111,7 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 					}
 				}
 			}
-			
+
 			// Also cache by package path
 			if pkg.PkgPath != "" {
 				r.packages[pkg.PkgPath] = pkg
@@ -212,36 +212,6 @@ func (r *SymbolResolverV2) ResolveComponent(fromDir, componentName string, tf *p
 	return nil, fmt.Errorf("%s is not a valid component", componentName)
 }
 
-// findImportPath finds the import path for a given alias in the template file
-func (r *SymbolResolverV2) findImportPath(tf *parser.TemplateFile, alias string) string {
-	for _, node := range tf.Nodes {
-		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
-			if goExpr.Expression.Stmt != nil {
-				if genDecl, ok := goExpr.Expression.Stmt.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
-					for _, spec := range genDecl.Specs {
-						if impSpec, ok := spec.(*ast.ImportSpec); ok {
-							// Check if this import has the alias we're looking for
-							var importAlias string
-							if impSpec.Name != nil {
-								importAlias = impSpec.Name.Name
-							} else {
-								// Default alias is the last part of the path
-								path := strings.Trim(impSpec.Path.Value, `"`)
-								parts := strings.Split(path, "/")
-								importAlias = parts[len(parts)-1]
-							}
-							if importAlias == alias {
-								return strings.Trim(impSpec.Path.Value, `"`)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
-
 // ResolveExpression determines the type of a Go expression
 // Called during code generation for expressions like { user.Name }
 func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, scope *types.Scope) (types.Type, error) {
@@ -336,6 +306,36 @@ func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, scope *types.Scope) 
 	default:
 		return nil, fmt.Errorf("unsupported expression type: %T", expr)
 	}
+}
+
+// findImportPath finds the import path for a given alias in the template file
+func (r *SymbolResolverV2) findImportPath(tf *parser.TemplateFile, alias string) string {
+	for _, node := range tf.Nodes {
+		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
+			if goExpr.Expression.Stmt != nil {
+				if genDecl, ok := goExpr.Expression.Stmt.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
+					for _, spec := range genDecl.Specs {
+						if impSpec, ok := spec.(*ast.ImportSpec); ok {
+							// Check if this import has the alias we're looking for
+							var importAlias string
+							if impSpec.Name != nil {
+								importAlias = impSpec.Name.Name
+							} else {
+								// Default alias is the last part of the path
+								path := strings.Trim(impSpec.Path.Value, `"`)
+								parts := strings.Split(path, "/")
+								importAlias = parts[len(parts)-1]
+							}
+							if importAlias == alias {
+								return strings.Trim(impSpec.Path.Value, `"`)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // loadPackage loads a package with type information
