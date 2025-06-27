@@ -114,11 +114,8 @@ templ Component(msg Message) {
 			want: []string{
 				"package test",
 				`"fmt"`, // Just check that fmt is imported, not the exact format
-				"// This is a comment about constants",
 				`const prefix = "MSG: "`,
-				"// Global variables",
 				"var (",
-				"// Counter tracks the number of messages",
 				"counter int",
 				")",
 				"type Message struct {",
@@ -140,6 +137,19 @@ templ Component(msg Message) {
 				t.Fatalf("Failed to parse template: %v", err)
 			}
 
+			// Debug: log what nodes were parsed
+			t.Logf("Parsed %d nodes", len(tf.Nodes))
+			for i, node := range tf.Nodes {
+				switch n := node.(type) {
+				case *templparser.TemplateFileGoExpression:
+					t.Logf("Node %d: GoExpression: %q (Stmt type: %T)", i, n.Expression.Value, n.Expression.AstNode)
+				case *templparser.HTMLTemplate:
+					t.Logf("Node %d: HTMLTemplate: %s", i, n.Expression.Value)
+				default:
+					t.Logf("Node %d: %T", i, node)
+				}
+			}
+
 			// Create resolver and generate overlay
 			resolver := NewSymbolResolverV2()
 			overlay, err := resolver.generateOverlay(tf)
@@ -156,3 +166,4 @@ templ Component(msg Message) {
 		})
 	}
 }
+

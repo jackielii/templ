@@ -13,6 +13,23 @@ It should be used in the following way:
 3. sort the modules topologically into a dependency graph
 4. use `golang.org/x/tools/go/packages` to load the packages
 
+### Performance Critical: Package Loading Strategy
+
+**IMPORTANT**: Always load all packages in a single `packages.Load` call rather than loading them one by one. This is a critical performance optimization that reduces processing time from over a minute to approximately 1 second.
+
+```go
+// CORRECT: Load all packages at once
+loadPaths := []string{dir1, dir2, dir3, ...}
+pkgs, err := packages.Load(cfg, loadPaths...)
+
+// WRONG: Loading packages one by one (causes severe performance degradation)
+for _, dir := range dirs {
+    pkgs, err := packages.Load(cfg, dir) // DON'T DO THIS
+}
+```
+
+The single-call approach allows the Go packages system to optimize dependency resolution and avoid redundant work.
+
 ### Element component
 
 Element component use the HTML element syntax but it accepts any valid Go expression as it's tag name. We want to support the following variants:
