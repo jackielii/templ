@@ -1,6 +1,6 @@
 # Symbol Resolver Architecture
 
-This document provides an in-depth analysis of the symbol resolution system in the templ codebase, focusing on `generator/symbol_resolver.go` and its usage patterns.
+This document provides an in-depth analysis of the symbol resolution system in the templ codebase, focusing on `generator/symbolresolver.go` and its usage patterns.
 
 ## Overview
 
