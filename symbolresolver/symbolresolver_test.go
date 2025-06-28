@@ -464,6 +464,43 @@ templ ProgressBar(progress int) {
 				"func ProgressBar(progress int) templ.Component",
 			},
 		},
+		{
+			name: "component with local variables",
+			templContent: `package main
+
+templ ShowData(items []string) {
+	{{ count := len(items) }}
+	<div>Total: { fmt.Sprint(count) }</div>
+	
+	if count > 0 {
+		{{ first := items[0] }}
+		<p>First item: { first }</p>
+	}
+	
+	for i, item := range items {
+		<li>{ fmt.Sprintf("%d: %s", i, item) }</li>
+	}
+	
+	switch count {
+	case 0:
+		<p>No items</p>
+	case 1:
+		{{ msg := "Single item" }}
+		<p>{ msg }</p>
+	default:
+		<p>Multiple items</p>
+	}
+}`,
+			wantContains: []string{
+				"func ShowData(items []string) templ.Component",
+				"count := len(items)",
+				"if count > 0",
+				"first := items[0]",
+				"for i, item := range items",
+				"switch count",
+				`msg := "Single item"`,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -471,7 +508,7 @@ templ ProgressBar(progress int) {
 			env := newTestEnv(t)
 			tf := env.parseTemplFile(t, tt.templContent)
 
-			overlay, err := env.resolver.generateOverlay(tf)
+			overlay, err := generateOverlay(tf)
 			if err != nil {
 				t.Fatalf("GenerateOverlay failed: %v", err)
 			}

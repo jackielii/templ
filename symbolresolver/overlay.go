@@ -72,6 +72,10 @@ func generateOverlay(tf *parser.TemplateFile) (string, error) {
 			// Generate function stub
 			signature := strings.TrimSpace(n.Expression.Value)
 			bodySection.WriteString(fmt.Sprintf("func %s templ.Component {\n", signature))
+			
+			// Process template body to track local variables
+			processTemplateNodes(n.Children, &bodySection, 1)
+			
 			bodySection.WriteString("\treturn templ.NopComponent\n")
 			bodySection.WriteString("}\n\n")
 
@@ -154,4 +158,75 @@ func generateOverlay(tf *parser.TemplateFile) (string, error) {
 	sb.WriteString(bodySection.String())
 
 	return sb.String(), nil
+}
+
+// processTemplateNodes recursively processes template nodes to track local variables
+func processTemplateNodes(nodes []parser.Node, sb *strings.Builder, indent int) {
+	for _, node := range nodes {
+		switch n := node.(type) {
+		case *parser.GoCode:
+			// Raw Go code block - include it to track local variables
+			writeIndentString(sb, indent, n.Expression.Value)
+			sb.WriteString("\n")
+			
+		case *parser.IfExpression:
+			// If expression creates a new scope
+			writeIndentString(sb, indent, "if ")
+			sb.WriteString(n.Expression.Value)
+			sb.WriteString(" {\n")
+			
+			// Process then branch
+			processTemplateNodes(n.Then, sb, indent+1)
+			
+			// Process else-if branches
+			for _, elseIf := range n.ElseIfs {
+				writeIndentString(sb, indent, "} else if ")
+				sb.WriteString(elseIf.Expression.Value)
+				sb.WriteString(" {\n")
+				processTemplateNodes(elseIf.Then, sb, indent+1)
+			}
+			
+			// Process else branch
+			if len(n.Else) > 0 {
+				writeIndentString(sb, indent, "} else {\n")
+				processTemplateNodes(n.Else, sb, indent+1)
+			}
+			
+			writeIndentString(sb, indent, "}\n")
+			
+		case *parser.ForExpression:
+			// For expression creates a new scope with loop variables
+			writeIndentString(sb, indent, "for ")
+			sb.WriteString(n.Expression.Value)
+			sb.WriteString(" {\n")
+			processTemplateNodes(n.Children, sb, indent+1)
+			writeIndentString(sb, indent, "}\n")
+			
+		case *parser.SwitchExpression:
+			// Switch expression creates a new scope
+			writeIndentString(sb, indent, "switch ")
+			sb.WriteString(n.Expression.Value)
+			sb.WriteString(" {\n")
+			
+			for _, c := range n.Cases {
+				writeIndentString(sb, indent, c.Expression.Value)
+				sb.WriteString("\n")
+				processTemplateNodes(c.Children, sb, indent+1)
+			}
+			
+			writeIndentString(sb, indent, "}\n")
+			
+		case parser.CompositeNode:
+			// Recursively process composite nodes (elements with children)
+			processTemplateNodes(n.ChildNodes(), sb, indent)
+		}
+	}
+}
+
+// writeIndentString writes a string with proper indentation
+func writeIndentString(sb *strings.Builder, indent int, s string) {
+	for i := 0; i < indent; i++ {
+		sb.WriteString("\t")
+	}
+	sb.WriteString(s)
 }
