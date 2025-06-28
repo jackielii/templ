@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"go/types"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -159,7 +160,7 @@ templ EmptyComponent() {
 					// Could be a type component, skip parameter checking
 					return
 				}
-				
+
 				// Check parameter names
 				params := sig.Params()
 				if params.Len() != len(tt.wantParams) {
@@ -273,16 +274,41 @@ func newTestEnv(t *testing.T) *testEnv {
 	dir := t.TempDir()
 
 	// Create a go.mod file for the test environment
+	// Get the absolute path to the templ module root
+	templRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("failed to get templ root path: %v", err)
+	}
+
+	// Create a go.mod file with proper pseudo-version for replace directive
+	// The pseudo-version format ensures Go recognizes this as a valid version
 	goModContent := `module testmod
 
 go 1.23
 
-require github.com/a-h/templ v0.0.0
+require github.com/a-h/templ v0.0.0-00010101000000-000000000000
 
-replace github.com/a-h/templ => ` + filepath.Join("..", "..", "..") + `
+replace github.com/a-h/templ => ` + templRoot + `
 `
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goModContent), 0o644); err != nil {
 		t.Fatalf("failed to create go.mod: %v", err)
+	}
+
+	// Create a simple Go file that imports github.com/a-h/templ to ensure it's not removed by go mod tidy
+	importerContent := `package main
+
+import _ "github.com/a-h/templ"
+`
+	if err := os.WriteFile(filepath.Join(dir, "importer.go"), []byte(importerContent), 0o644); err != nil {
+		t.Fatalf("failed to create importer.go: %v", err)
+	}
+
+	// Run go mod tidy to resolve all dependencies
+	// This is necessary because packages.Load needs all transitive dependencies
+	cmd := exec.Command("go", "mod", "tidy")
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to run go mod tidy: %v\nOutput: %s", err, output)
 	}
 
 	return &testEnv{

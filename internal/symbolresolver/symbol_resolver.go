@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/a-h/templ/parser/v2"
-	"github.com/davecgh/go-spew/spew"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -78,6 +77,7 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 
 	// Now load packages for each module separately
 	for moduleRoot, files := range moduleFiles {
+		// fmt.Printf("Processing module at %s with %d files\n", moduleRoot, len(files))
 		// Group files by package within this module
 		packageDirs := make(map[string][]string)
 		for _, file := range files {
@@ -89,6 +89,7 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 		if err := r.loadPackagesForModule(moduleRoot, packageDirs); err != nil {
 			// Continue with other modules - one module's failure shouldn't stop others
 			// The error is already descriptive from loadPackagesForModule
+			fmt.Printf("Error loading packages for module %s: %v\n", moduleRoot, err)
 			_ = err
 		}
 	}
@@ -103,9 +104,11 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 	}
 
 	cfg := &packages.Config{
-		Mode:    packages.LoadSyntax,
-		Dir:     moduleRoot,
-		Overlay: r.overlays,
+		Mode:       packages.LoadSyntax,
+		Dir:        moduleRoot,
+		Overlay:    r.overlays,
+		Env:        os.Environ(),
+		BuildFlags: []string{}, // TODO: maybe support build flags in the future
 	}
 
 	// Convert directory paths to package patterns relative to module root
@@ -120,6 +123,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 			patterns = append(patterns, "./"+relPath)
 		}
 	}
+	fmt.Printf("Loading packages from %s with patterns: %v\n", moduleRoot, patterns)
 
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil && len(pkgs) == 0 {
@@ -131,12 +135,14 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 
 	// Process all loaded packages
 	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		// Debug: log packages being loaded
+		fmt.Printf("Loaded package: %s (path: %s, ID: %s, hasTypes: %v)\n", pkg.Name, pkg.PkgPath, pkg.ID, pkg.Types != nil)
 		// Skip packages with errors - packages.Visit handles dependencies correctly
 		// even with errors, so we can still cache what we get
 		if len(pkg.Errors) > 0 {
 			// Log errors for debugging but don't skip the package
 			// Most errors are benign (e.g., unused imports in overlays)
-			// fmt.Printf("Package %s has errors: %v\n", pkg.ID, pkg.Errors)
+			fmt.Printf("Package %s has errors: %v\n", pkg.ID, pkg.Errors)
 		}
 
 		// Cache by package path if available
@@ -168,6 +174,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 		}
 	})
 
+	// TODO: once we implement proper scoping, we don't need to cache by directories
 	// Now cache packages by the directories where we found templ files
 	for dir := range packageDirs {
 		// Find which package this directory belongs to
@@ -177,6 +184,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 				if pkgDir == dir {
 					if pkg, ok := r.packages[pkgPath]; ok {
 						r.packages[dir] = pkg
+						fmt.Printf("Cached package %s for directory %s\n", pkgPath, dir)
 						found = true
 						break
 					}
@@ -187,9 +195,11 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 			}
 		}
 
-		// If we still can't find a package, it might be due to edge cases
-		// in how packages.Load reports directory mappings
-		// fmt.Printf("Warning: could not find package for directory %s\n", dir)
+		if !found {
+			// If we still can't find a package, it might be due to edge cases
+			// in how packages.Load reports directory mappings
+			fmt.Printf("Warning: could not find package for directory %s\n", dir)
+		}
 	}
 
 	return nil
@@ -200,6 +210,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 // Returns either:
 // - *types.Signature for function/method components
 // - *types.Named for type components that implement templ.Component
+// TODO: implement proper scoping to resolve components using the correct scope instead of relying on the filename
 func (r *SymbolResolverV2) ResolveComponent(filename string, expr ast.Expr) (types.Type, error) {
 	// Get the absolute path of the file
 	absFilename, err := filepath.Abs(filename)
@@ -243,13 +254,8 @@ func (r *SymbolResolverV2) ResolveComponent(filename string, expr ast.Expr) (typ
 		}
 	}
 
-	// If we couldn't find a file-specific scope, use the package scope
 	if fileScope == nil {
-		// fmt.Printf("Using package scope as fallback\n")
-		fileScope = pkg.Types.Scope()
-		// if fileScope != nil {
-		// 	fmt.Printf("Package scope names: %v\n", fileScope.Names())
-		// }
+		return nil, fmt.Errorf("file scope for %s not found in package %s", overlayPath, pkg.PkgPath)
 	}
 
 	// Use ResolveExpression to get the type
@@ -279,16 +285,32 @@ func (r *SymbolResolverV2) validateComponentType(typ types.Type) error {
 
 		// Recursively validate the return type
 		resultType := results.At(0).Type()
+		// Debug: log the result type
+		fmt.Printf("Function returns: %s (underlying: %T)\n", resultType, resultType)
+
+		// Special case: if the return type is templ.Component, it's valid
+		if named, ok := resultType.(*types.Named); ok {
+			if named.Obj() != nil && named.Obj().Pkg() != nil {
+				fmt.Printf("  Return type package: %s, name: %s\n", named.Obj().Pkg().Path(), named.Obj().Name())
+			}
+		}
+
 		return r.validateComponentType(resultType)
 
 	case *types.Named:
+		// Check if the underlying type is an interface (e.g., templ.Component)
+		if _, isInterface := t.Underlying().(*types.Interface); isInterface {
+			// This is a named interface type, validate it as an interface
+			return r.validateComponentType(t.Underlying())
+		}
+
 		// Type component - check if it has a Render method
 		// Get the package for this type
-		// var pkg *types.Package
-		// if t.Obj() != nil {
-		// 	pkg = t.Obj().Pkg()
-		// }
-		method, _, _ := types.LookupFieldOrMethod(t, true, nil, "Render")
+		var pkg *types.Package
+		if t.Obj() != nil {
+			pkg = t.Obj().Pkg()
+		}
+		method, _, _ := types.LookupFieldOrMethod(t, true, pkg, "Render")
 		if method == nil {
 			return fmt.Errorf("type %s does not implement templ.Component (no Render method)", t)
 		}
@@ -313,11 +335,9 @@ func (r *SymbolResolverV2) validateComponentType(typ types.Type) error {
 		return fmt.Errorf("Render is not a method")
 
 	case *types.Basic:
-		// Handle "invalid type" which occurs when type resolution fails
+		fmt.Printf("Basic type: %s, Kind: %v\n", t, t.Kind())
 		if t.Kind() == types.Invalid {
-			// In test environments, templ.Component might not be resolvable
-			// If we see "invalid type", assume it's okay for now
-			return nil
+			fmt.Printf("  Invalid type detected - this suggests package loading issues\n")
 		}
 		return fmt.Errorf("basic type %s cannot be a component", t)
 
