@@ -92,13 +92,13 @@ templ Page() {
 
 func TestSymbolResolverV2_ResolveComponent(t *testing.T) {
 	tests := []struct {
-		name          string
-		componentName string
-		templFile     string
-		setupFiles    map[string]string // additional files to set up
-		wantParams    []string          // parameter names
-		wantErr       bool
-		isTypeComponent bool            // true if it's a type that implements Component
+		name            string
+		componentName   string
+		templFile       string
+		setupFiles      map[string]string // additional files to set up
+		wantParams      []string          // parameter names
+		wantErr         bool
+		isTypeComponent bool // true if it's a type that implements Component
 	}{
 		{
 			name:          "local component",
@@ -178,7 +178,7 @@ templ TestComponent() {
 			if err != nil && !tt.wantErr {
 				t.Fatalf("Failed to get file scope: %v", err)
 			}
-			
+
 			// Resolve the component
 			var typ types.Type
 			if fileScope != nil {
@@ -320,7 +320,7 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	// Create a go.mod file for the test environment
 	// Get the absolute path to the templ module root
-	templRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	templRoot, err := filepath.Abs(filepath.Join(".."))
 	if err != nil {
 		t.Fatalf("failed to get templ root path: %v", err)
 	}

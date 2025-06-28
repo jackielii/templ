@@ -20,7 +20,7 @@ func TestIntegration_GeneratorDirectory(t *testing.T) {
 
 	// Find all .templ files in generator directory
 	var templFiles []string
-	generatorDir, err := filepath.Abs(filepath.Join("..", "..", "generator"))
+	generatorDir, err := filepath.Abs(filepath.Join("..", "generator"))
 	if err != nil {
 		t.Fatalf("Failed to get absolute path for generator directory: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestIntegration_GeneratorDirectory(t *testing.T) {
 			if err != nil && !tc.shouldFail {
 				t.Fatalf("Failed to get file scope: %v", err)
 			}
-			
+
 			var typ types.Type
 			if fileScope != nil {
 				typ, err = ResolveComponent(fileScope, expr)
@@ -391,10 +391,11 @@ templ ShowUser(user User, enabled bool) {
 
 	// Create a go.mod file
 	// Compute the path to the templ module root
-	templRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	templRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
+	println("Using templ root:", templRoot)
 
 	goModContent := fmt.Sprintf(`module test
 
