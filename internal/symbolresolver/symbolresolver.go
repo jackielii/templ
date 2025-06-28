@@ -578,26 +578,9 @@ func (r *SymbolResolverV2) generateOverlay(tf *parser.TemplateFile) (string, err
 
 		case *parser.HTMLTemplate:
 			needsTemplImport = true
-			// Generate function stub with local variables
+			// Generate function stub
 			signature := strings.TrimSpace(n.Expression.Value)
 			bodySection.WriteString(fmt.Sprintf("func %s templ.Component {\n", signature))
-			
-			// Extract local variables from the template
-			extractor := newTemplateVariableExtractor()
-			localVars := extractor.extractFromHTMLTemplate(n)
-			
-			// Generate local variable declarations
-			if len(localVars) > 0 {
-				bodySection.WriteString("\t// Local variables from template\n")
-				for varName, varType := range localVars {
-					// Skip parameters that are already declared in the function signature
-					if !isParameterVariable(signature, varName) {
-						bodySection.WriteString(fmt.Sprintf("\tvar %s %s\n", varName, varType))
-						bodySection.WriteString(fmt.Sprintf("\t_ = %s\n", varName))
-					}
-				}
-			}
-			
 			bodySection.WriteString("\treturn templ.NopComponent\n")
 			bodySection.WriteString("}\n\n")
 
@@ -691,22 +674,4 @@ func findModuleRoot(dir string) string {
 	}
 	// If no go.mod found, return the original directory
 	return dir
-}
-
-// isParameterVariable checks if a variable name is already declared as a parameter
-func isParameterVariable(signature string, varName string) bool {
-	// Simple check - look for the variable name in the signature
-	// This works for most cases but may have false positives
-	// A more robust solution would parse the signature properly
-	openParen := strings.Index(signature, "(")
-	closeParen := strings.LastIndex(signature, ")")
-	
-	if openParen == -1 || closeParen == -1 || closeParen <= openParen {
-		return false
-	}
-	
-	params := signature[openParen+1 : closeParen]
-	// Check if the variable name appears as a parameter
-	// We check for word boundaries to avoid false matches
-	return strings.Contains(" "+params+" ", " "+varName+" ")
 }
