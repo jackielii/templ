@@ -2,6 +2,7 @@ package goexpression
 
 import (
 	"fmt"
+	"go/ast"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -863,7 +864,7 @@ type testInput struct {
 	expectedErr error
 }
 
-type extractor func(content string) (start, end int, stmt any, err error)
+type extractor func(content string) (start, end int, stmt ast.Node, err error)
 
 func run(test testInput, prefix, suffix string, e extractor) func(t *testing.T) {
 	return func(t *testing.T) {

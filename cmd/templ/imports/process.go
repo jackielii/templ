@@ -79,12 +79,7 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 	var updatedImports []*ast.ImportSpec
 	var eg errgroup.Group
 	eg.Go(func() (err error) {
-		// Determine the correct working directory for symbol resolution
-		var opts []generator.GenerateOpt
-		// Skip element component resolution for imports processing
-		opts = append(opts, generator.WithSkipSymbolResolution())
-
-		if _, err := generator.Generate(t, gw, opts...); err != nil {
+		if _, err := generator.Generate(t, gw); err != nil {
 			return fmt.Errorf("failed to generate go code: %w", err)
 		}
 		updatedImports, err = updateImports(fileName, gw.String())

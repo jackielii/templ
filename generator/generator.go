@@ -125,7 +125,6 @@ func Generate(template *parser.TemplateFile, w io.Writer, opts ...GenerateOpt) (
 		tf:        template,
 		w:         NewRangeWriter(w),
 		sourceMap: parser.NewSourceMap(),
-		context:   newGeneratorContext(),
 	}
 	for _, opt := range opts {
 		if err = opt(g); err != nil {
@@ -149,9 +148,6 @@ type generator struct {
 
 	options     GeneratorOptions
 	diagnostics []parser.Diagnostic
-
-	// context tracks the current position in the AST for symbol resolution
-	context *generatorContext
 }
 
 func (g *generator) generate() (err error) {
@@ -471,26 +467,6 @@ func (g *generator) writeTemplate(nodeIdx int, t *parser.HTMLTemplate) error {
 		return errors.New("template is nil")
 	}
 
-	// Set template in context and add parameters to scope
-	g.context.setCurrentTemplate(t)
-	defer g.context.clearCurrentTemplate()
-
-	// Add template parameters to scope
-	if sig, ok := globalSymbolResolver.getLocalTemplate(g.getTemplateName(t)); ok {
-		for _, param := range sig.parameters {
-			g.context.addVariable(param.name, &symbolTypeInfo{
-				fullType:     param.typ,
-				isComponent:  param.isComponent,
-				isAttributer: param.isAttributer,
-				isPointer:    param.isPointer,
-				isSlice:      param.isSlice,
-				isMap:        param.isMap,
-				isString:     param.isString,
-				isBool:       param.isBool,
-			})
-		}
-	}
-
 	var r parser.Range
 	var tgtSymbolRange parser.Range
 	var err error
@@ -753,16 +729,6 @@ func escapeQuotes(s string) string {
 func (g *generator) writeIfExpression(indentLevel int, n *parser.IfExpression, nextNode parser.Node) (err error) {
 	var r parser.Range
 
-	// Push new scope for the if statement
-	g.context.pushScope(n)
-	defer g.context.popScope()
-
-	// Extract and add condition variables to scope
-	condVars := extractIfConditionVariables(n.Expression)
-	for name, typeInfo := range condVars {
-		g.context.addVariable(name, typeInfo)
-	}
-
 	// if
 	if _, err = g.w.WriteIndent(indentLevel, `if `); err != nil {
 		return err
@@ -971,16 +937,6 @@ func (g *generator) writeCallTemplateExpression(indentLevel int, n *parser.CallT
 
 func (g *generator) writeForExpression(indentLevel int, n *parser.ForExpression, next parser.Node) (err error) {
 	var r parser.Range
-
-	// Push new scope for the for loop
-	g.context.pushScope(n)
-	defer g.context.popScope()
-
-	// Extract and add loop variables to scope
-	loopVars := extractForLoopVariables(n.Expression)
-	for name, typeInfo := range loopVars {
-		g.context.addVariable(name, typeInfo)
-	}
 
 	// for
 	if _, err = g.w.WriteIndent(indentLevel, `for `); err != nil {
@@ -1718,18 +1674,6 @@ func (g *generator) writeGoCode(indentLevel int, e parser.Expression) (err error
 func (g *generator) writeStringExpression(indentLevel int, e parser.Expression) (err error) {
 	if strings.TrimSpace(e.Value) == "" {
 		return
-	}
-
-	// In this block, we want to support { child } expression for templ.Component variables.
-	// Only attempt resolution if symbol resolution is enabled and preprocessing has been done
-	if !g.options.SkipSymbolResolution {
-		// Try to resolve the expression using context
-		exprValue := strings.TrimSpace(e.Value)
-		typeInfo, err := globalSymbolResolver.resolveExpression(exprValue, g.context, g.currentFileDir())
-		if err == nil && typeInfo.isComponent {
-			// This is a component, use call template expression logic
-			return g.writeCallTemplateExpression(indentLevel, &parser.CallTemplateExpression{Expression: e})
-		}
 	}
 
 	var r parser.Range
