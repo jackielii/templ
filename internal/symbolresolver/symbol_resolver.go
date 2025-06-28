@@ -210,8 +210,32 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 // Returns either:
 // - *types.Signature for function/method components
 // - *types.Named for type components that implement templ.Component
-// TODO: implement proper scoping to resolve components using the correct scope instead of relying on the filename
-func (r *SymbolResolverV2) ResolveComponent(filename string, expr ast.Expr) (types.Type, error) {
+// scope should be the appropriate scope for resolution (e.g., file scope which has package scope as parent)
+func ResolveComponent(scope *types.Scope, expr ast.Expr) (types.Type, error) {
+	if scope == nil {
+		return nil, fmt.Errorf("scope is nil")
+	}
+	if expr == nil {
+		return nil, fmt.Errorf("expression is nil")
+	}
+
+	// Use ResolveExpression to get the type
+	typ, err := ResolveExpression(expr, scope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve component expression: %w", err)
+	}
+
+	// Validate the component type
+	if err := validateComponentType(typ); err != nil {
+		return nil, err
+	}
+
+	return typ, nil
+}
+
+// GetFileScope finds the file scope for a given filename
+// This is a helper for callers that need to resolve the scope from a filename
+func (r *SymbolResolverV2) GetFileScope(filename string) (*types.Scope, error) {
 	// Get the absolute path of the file
 	absFilename, err := filepath.Abs(filename)
 	if err != nil {
@@ -235,8 +259,6 @@ func (r *SymbolResolverV2) ResolveComponent(filename string, expr ast.Expr) (typ
 	overlayPath := strings.TrimSuffix(absFilename, ".templ") + "_templ.go"
 
 	var fileScope *types.Scope
-	// fmt.Printf("Looking for overlay: %s\n", overlayPath)
-	// fmt.Printf("CompiledGoFiles: %v\n", pkg.CompiledGoFiles)
 	for i, file := range pkg.CompiledGoFiles {
 		if file == overlayPath && i < len(pkg.Syntax) {
 			// Found the overlay file - get its scope
@@ -245,10 +267,6 @@ func (r *SymbolResolverV2) ResolveComponent(filename string, expr ast.Expr) (typ
 				// pkg.Syntax[i] is already an *ast.File
 				fileNode := pkg.Syntax[i]
 				fileScope = pkg.TypesInfo.Scopes[fileNode]
-				// fmt.Printf("Found file scope for %s\n", overlayPath)
-				// if fileScope != nil {
-				// 	fmt.Printf("File scope names: %v\n", fileScope.Names())
-				// }
 			}
 			break
 		}
@@ -258,23 +276,11 @@ func (r *SymbolResolverV2) ResolveComponent(filename string, expr ast.Expr) (typ
 		return nil, fmt.Errorf("file scope for %s not found in package %s", overlayPath, pkg.PkgPath)
 	}
 
-	// Use ResolveExpression to get the type
-	// Pass file scope which has package scope as its parent
-	typ, err := ResolveExpression(expr, fileScope)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve component expression: %w", err)
-	}
-
-	// Validate the component type
-	if err := r.validateComponentType(typ); err != nil {
-		return nil, err
-	}
-
-	return typ, nil
+	return fileScope, nil
 }
 
 // validateComponentType validates that a type can be used as a component
-func (r *SymbolResolverV2) validateComponentType(typ types.Type) error {
+func validateComponentType(typ types.Type) error {
 	switch t := typ.(type) {
 	case *types.Signature:
 		// Function component - validate it returns templ.Component
@@ -295,17 +301,18 @@ func (r *SymbolResolverV2) validateComponentType(typ types.Type) error {
 			}
 		}
 
-		return r.validateComponentType(resultType)
+		return validateComponentType(resultType)
 
 	case *types.Named:
 		// Check if the underlying type is an interface (e.g., templ.Component)
 		if _, isInterface := t.Underlying().(*types.Interface); isInterface {
 			// This is a named interface type, validate it as an interface
-			return r.validateComponentType(t.Underlying())
+			return validateComponentType(t.Underlying())
 		}
 
 		// Type component - check if it has a Render method
-		// Get the package for this type
+		// Get the package for this type: not sure if this is required or correct
+		// TODO: find a use case where this is needed
 		var pkg *types.Package
 		if t.Obj() != nil {
 			pkg = t.Obj().Pkg()
@@ -344,7 +351,7 @@ func (r *SymbolResolverV2) validateComponentType(typ types.Type) error {
 	default:
 		// Check if it's a variable of a type that implements templ.Component
 		if named, ok := typ.Underlying().(*types.Named); ok {
-			return r.validateComponentType(named)
+			return validateComponentType(named)
 		}
 		return fmt.Errorf("type %s is not a valid component (expected function returning templ.Component or type implementing it)", typ)
 	}
@@ -394,23 +401,6 @@ func ResolveExpression(expr ast.Expr, scope *types.Scope) (types.Type, error) {
 		return nil, fmt.Errorf("scope is nil")
 	}
 
-	// Try to extract package from scope (walk up to package scope and find a package-level object)
-	var pkg *types.Package
-	currentScope := scope
-	for currentScope != nil {
-		// Check if any object in this scope belongs to a package
-		for _, name := range currentScope.Names() {
-			if obj := currentScope.Lookup(name); obj != nil && obj.Pkg() != nil {
-				pkg = obj.Pkg()
-				break
-			}
-		}
-		if pkg != nil {
-			break
-		}
-		currentScope = currentScope.Parent()
-	}
-
 	// Try to resolve the expression type using the scope
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -458,8 +448,15 @@ func ResolveExpression(expr ast.Expr, scope *types.Scope) (types.Type, error) {
 			baseType = ptr.Elem()
 		}
 
+		// Type component - check if it has a Render method
+		// Get the package for this type: not sure if this is required or correct
+		// TODO: find a use case where this is needed
+		// var pkg *types.Package
+		// if t.Obj() != nil {
+		// 	pkg = t.Obj().Pkg()
+		// }
 		// Look up the field or method
-		obj, _, _ := types.LookupFieldOrMethod(baseType, true, pkg, e.Sel.Name)
+		obj, _, _ := types.LookupFieldOrMethod(baseType, true, nil, e.Sel.Name)
 		if obj == nil {
 			return nil, fmt.Errorf("field or method %s not found", e.Sel.Name)
 		}

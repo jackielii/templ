@@ -221,7 +221,16 @@ func TestIntegration_GeneratorDirectory(t *testing.T) {
 				t.Skip("No template file found for directory")
 			}
 
-			typ, err := resolver.ResolveComponent(templFile, expr)
+			// Get the file scope first
+			fileScope, err := resolver.GetFileScope(templFile)
+			if err != nil && !tc.shouldFail {
+				t.Fatalf("Failed to get file scope: %v", err)
+			}
+			
+			var typ types.Type
+			if fileScope != nil {
+				typ, err = ResolveComponent(fileScope, expr)
+			}
 
 			if tc.shouldFail {
 				if err == nil {

@@ -173,8 +173,17 @@ templ TestComponent() {
 				t.Fatalf("Failed to parse component name %q: %v", tt.componentName, parseErr)
 			}
 
+			// Get the file scope first
+			fileScope, err := env.resolver.GetFileScope(templPath)
+			if err != nil && !tt.wantErr {
+				t.Fatalf("Failed to get file scope: %v", err)
+			}
+			
 			// Resolve the component
-			typ, err := env.resolver.ResolveComponent(templPath, expr)
+			var typ types.Type
+			if fileScope != nil {
+				typ, err = ResolveComponent(fileScope, expr)
+			}
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ResolveComponent() error = %v, wantErr %v", err, tt.wantErr)
 				return

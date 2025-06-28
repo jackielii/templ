@@ -165,7 +165,7 @@ The symbol resolver treats components as expressions, which simplifies the imple
 // Returns either:
 // - *types.Signature for function/method components  
 // - *types.Named for type components that implement templ.Component
-func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (types.Type, error)
+func ResolveComponent(scope *types.Scope, expr ast.Expr) (types.Type, error)
 ```
 
 This design allows the code generator to determine the component type and generate appropriate code:
@@ -173,6 +173,8 @@ This design allows the code generator to determine the component type and genera
 - For `*types.Named`: Type instantiation (e.g., `(&ComponentType{...}).Render(ctx, w)`)
 
 The caller is responsible for:
-1. Type-asserting the result to determine component type
-2. Validating the signature or type implements `templ.Component`
+1. Providing the appropriate scope for resolution (typically file scope)
+2. Type-asserting the result to determine component type
 3. Generating the appropriate invocation code
+
+Note that `ResolveComponent` and `validateComponentType` are now standalone functions, not methods, as they don't depend on the resolver's state. The resolver provides `GetFileScope` as a helper method for callers that need to obtain the appropriate scope from a filename.
