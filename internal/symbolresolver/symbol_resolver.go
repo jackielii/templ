@@ -257,8 +257,8 @@ func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (typ
 	}
 
 	// Use ResolveExpression to get the type
-	// Pass both file scope (for imports) and package scope (for declarations)
-	typ, err := r.ResolveExpression(expr, fileScope, pkg.Types.Scope())
+	// Pass file scope which has package scope as its parent
+	typ, err := ResolveExpression(expr, fileScope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve component expression: %w", err)
 	}
@@ -341,29 +341,24 @@ func validateRenderSignature(sig *types.Signature) error {
 
 // ResolveExpression determines the type of a Go expression
 // Called during code generation for expressions like { user.Name }
-// fileScope contains imports, pkgScope contains declarations
-func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, fileScope, pkgScope *types.Scope) (types.Type, error) {
+// scope should be the innermost scope (e.g., file scope which has package scope as parent)
+func ResolveExpression(expr ast.Expr, scope *types.Scope) (types.Type, error) {
 	if expr == nil {
 		return nil, fmt.Errorf("expression is nil")
 	}
-	if pkgScope == nil {
-		return nil, fmt.Errorf("package scope is nil")
+	if scope == nil {
+		return nil, fmt.Errorf("scope is nil")
 	}
 
 	// Try to resolve the expression type using the scope
 	switch e := expr.(type) {
 	case *ast.Ident:
-		// Simple identifier - check package scope first (for local declarations)
-		if obj := pkgScope.Lookup(e.Name); obj != nil {
-			return obj.Type(), nil
+		// Simple identifier - use LookupParent to search up the scope hierarchy
+		_, obj := scope.LookupParent(e.Name, token.NoPos)
+		if obj == nil {
+			return nil, fmt.Errorf("identifier %s not found in scope", e.Name)
 		}
-		// Then check file scope (shouldn't normally have non-import declarations, but be thorough)
-		if fileScope != nil {
-			if obj := fileScope.Lookup(e.Name); obj != nil {
-				return obj.Type(), nil
-			}
-		}
-		return nil, fmt.Errorf("identifier %s not found in scope", e.Name)
+		return obj.Type(), nil
 
 	case *ast.SelectorExpr:
 		// This could be either:
@@ -372,28 +367,27 @@ func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, fileScope, pkgScope 
 
 		// Check if X is an identifier - might be a package name
 		if ident, ok := e.X.(*ast.Ident); ok {
-			// Try to find it as a package first in file scope (imports are file-scoped)
-			var obj types.Object
-			if fileScope != nil {
-				obj = fileScope.Lookup(ident.Name)
-			}
-			// Check if this is a package name (imported package)
-			if pkgName, ok := obj.(*types.PkgName); ok {
-				// Look up the identifier in the imported package
-				importedPkg := pkgName.Imported()
-				if importedPkg == nil {
-					return nil, fmt.Errorf("imported package %s not found", ident.Name)
+			// Look up the identifier - imports are in file scope, other identifiers in package scope
+			_, obj := scope.LookupParent(ident.Name, token.NoPos)
+			if obj != nil {
+				// Check if this is a package name (imported package)
+				if pkgName, ok := obj.(*types.PkgName); ok {
+					// Look up the identifier in the imported package
+					importedPkg := pkgName.Imported()
+					if importedPkg == nil {
+						return nil, fmt.Errorf("imported package %s not found", ident.Name)
+					}
+					obj := importedPkg.Scope().Lookup(e.Sel.Name)
+					if obj == nil {
+						return nil, fmt.Errorf("%s not found in package %s", e.Sel.Name, ident.Name)
+					}
+					return obj.Type(), nil
 				}
-				obj := importedPkg.Scope().Lookup(e.Sel.Name)
-				if obj == nil {
-					return nil, fmt.Errorf("%s not found in package %s", e.Sel.Name, ident.Name)
-				}
-				return obj.Type(), nil
 			}
 		}
 
 		// Not a package - resolve as field/method access
-		baseType, err := r.ResolveExpression(e.X, fileScope, pkgScope)
+		baseType, err := ResolveExpression(e.X, scope)
 		if err != nil {
 			return nil, err
 		}
@@ -412,7 +406,7 @@ func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, fileScope, pkgScope 
 
 	case *ast.IndexExpr:
 		// Array/slice/map index (e.g., items[0])
-		baseType, err := r.ResolveExpression(e.X, fileScope, pkgScope)
+		baseType, err := ResolveExpression(e.X, scope)
 		if err != nil {
 			return nil, err
 		}
@@ -430,7 +424,7 @@ func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, fileScope, pkgScope 
 
 	case *ast.CallExpr:
 		// Function call
-		fnType, err := r.ResolveExpression(e.Fun, fileScope, pkgScope)
+		fnType, err := ResolveExpression(e.Fun, scope)
 		if err != nil {
 			return nil, err
 		}

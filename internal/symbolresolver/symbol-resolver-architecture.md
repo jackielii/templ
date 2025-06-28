@@ -127,16 +127,17 @@ For lowercase tags, we can try to resolve it locally first and if it fails, we'l
 The symbol resolver treats components as expressions, which simplifies the implementation:
 
 - **ResolveComponent** accepts an `ast.Expr` instead of a string, ensuring parsing happens at the parser level
-- **ResolveExpression** handles all Go expression types uniformly with both file and package scopes
+- **ResolveExpression** is a standalone function that handles all Go expression types uniformly
 - Component resolution uses the same expression resolution logic internally
-- File-scoped imports are properly handled by passing both scopes to ResolveExpression
+- Scope hierarchy is leveraged through `LookupParent` for proper name resolution
 
 **Key Implementation Details**: 
 
-1. **Dual Scope Resolution**: `ResolveExpression` accepts both file scope (for imports) and package scope (for declarations):
-   - File scope contains imported package names
-   - Package scope contains type declarations and functions
-   - Package-qualified identifiers (e.g., `pkg.Component`) are resolved by checking for `*types.PkgName` in file scope
+1. **Single Scope Parameter**: `ResolveExpression` accepts a single scope parameter, typically the innermost scope:
+   - File scope has package scope as its parent (verified by `scope.Parent()`)
+   - `LookupParent` automatically searches up the scope hierarchy
+   - Package-qualified identifiers (e.g., `pkg.Component`) are resolved by checking for `*types.PkgName`
+   - This design follows Go's natural scope hierarchy model
 
 2. **Component Validation**: The resolver validates that components match the `templ.Component` interface:
    - Functions must return `templ.Component`

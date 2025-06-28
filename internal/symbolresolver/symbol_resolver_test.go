@@ -244,8 +244,8 @@ func testFunc() {
 				t.Fatalf("failed to parse expression: %v", err)
 			}
 
-			// Resolve using package scope (no file scope needed for these tests)
-			typ, err := env.resolver.ResolveExpression(expr, nil, pkg.Scope())
+			// Resolve using package scope
+			typ, err := ResolveExpression(expr, pkg.Scope())
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ResolveExpression() error = %v, wantErr %v", err, tt.wantErr)
 				return

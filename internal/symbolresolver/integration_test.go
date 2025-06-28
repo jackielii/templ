@@ -494,8 +494,8 @@ replace github.com/a-h/templ => %s
 				t.Fatalf("Failed to parse expression %q: %v", tc.exprStr, err)
 			}
 
-			// Resolve the expression type (no file scope needed for these tests)
-			typ, err := resolver.ResolveExpression(expr, nil, scope)
+			// Resolve the expression type
+			typ, err := ResolveExpression(expr, scope)
 
 			if tc.shouldFail {
 				if err == nil {
