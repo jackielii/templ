@@ -5,15 +5,13 @@ import (
 	"fmt"
 	"go/ast"
 	"go/format"
+	goparser "go/parser"
 	"go/token"
 	"path"
 	"slices"
 	"strconv"
 	"strings"
 
-	goparser "go/parser"
-
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/imports"
 
@@ -33,9 +31,36 @@ func convertTemplToGoURI(templURI string) (isTemplFile bool, goURI string) {
 
 var fset = token.NewFileSet()
 
-func updateImports(name, src string) (updated []*ast.ImportSpec, err error) {
+func updateImports(name, src string, existingImports []*ast.ImportSpec) (updated []*ast.ImportSpec, err error) {
+	// Prepend existing imports to the source so imports.Process knows about them
+	importStmts := ""
+	if len(existingImports) > 0 {
+		importStmts = "import (\n"
+		for _, imp := range existingImports {
+			if imp.Name != nil {
+				importStmts += fmt.Sprintf("\t%s %s\n", imp.Name.Name, imp.Path.Value)
+			} else {
+				importStmts += fmt.Sprintf("\t%s\n", imp.Path.Value)
+			}
+		}
+		importStmts += ")\n\n"
+	}
+	
+	// Find package declaration and insert imports after it
+	lines := strings.Split(src, "\n")
+	var pkgIndex int
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "package ") {
+			pkgIndex = i
+			break
+		}
+	}
+	
+	// Reconstruct source with imports
+	modifiedSrc := strings.Join(lines[:pkgIndex+1], "\n") + "\n" + importStmts + strings.Join(lines[pkgIndex+1:], "\n")
+	
 	// Apply auto imports.
-	updatedGoCode, err := imports.Process(name, []byte(src), nil)
+	updatedGoCode, err := imports.Process(name, []byte(modifiedSrc), nil)
 	if err != nil {
 		return updated, fmt.Errorf("failed to process go code %q: %w", src, err)
 	}
@@ -61,91 +86,134 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 		return t, fmt.Errorf("invalid filepath: %s", t.Filepath)
 	}
 
-	// The first node always contains existing imports.
-	// If there isn't one, create it.
-	if len(t.Nodes) == 0 {
-		t.Nodes = append(t.Nodes, &parser.TemplateFileGoExpression{})
+	// Collect all import nodes from the beginning of the file
+	var importSpecs []*ast.ImportSpec
+	var nonImportNodes []parser.TemplateFileNode
+	
+	for _, node := range t.Nodes {
+		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
+			// Check if this is an import node by looking at the AST
+			if goExpr.Expression.AstNode != nil {
+				if genDecl, ok := goExpr.Expression.AstNode.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
+					// Extract ImportSpecs from the GenDecl
+					for _, spec := range genDecl.Specs {
+						if impSpec, ok := spec.(*ast.ImportSpec); ok {
+							importSpecs = append(importSpecs, impSpec)
+						}
+					}
+					continue
+				}
+			}
+		}
+		nonImportNodes = append(nonImportNodes, node)
 	}
-	// If there is one, ensure it is a Go expression.
-	if _, ok := t.Nodes[0].(*parser.TemplateFileGoExpression); !ok {
-		t.Nodes = append([]parser.TemplateFileNode{&parser.TemplateFileGoExpression{}}, t.Nodes...)
-	}
-
-	// Find all existing imports.
-	importsNode := t.Nodes[0].(*parser.TemplateFileGoExpression)
 
 	// Generate code.
 	gw := bytes.NewBuffer(nil)
-	var updatedImports []*ast.ImportSpec
-	var eg errgroup.Group
-	eg.Go(func() (err error) {
-		if _, err := generator.Generate(t, gw); err != nil {
-			return fmt.Errorf("failed to generate go code: %w", err)
-		}
-		updatedImports, err = updateImports(fileName, gw.String())
-		if err != nil {
-			return fmt.Errorf("failed to get imports from generated go code: %w", err)
-		}
-		return nil
-	})
-
-	var firstGoNodeInTemplate *ast.File
-	// Update the template with the imports.
-	// Ensure that there is a Go expression to add the imports to as the first node.
-	eg.Go(func() (err error) {
-		firstGoNodeInTemplate, err = goparser.ParseFile(fset, fileName, t.Package.Expression.Value+"\n"+importsNode.Expression.Value, goparser.AllErrors|goparser.ParseComments)
-		if err != nil {
-			return fmt.Errorf("failed to parse imports section: %w", err)
-		}
-		return nil
-	})
-
-	// Wait for completion of both parts.
-	if err := eg.Wait(); err != nil {
-		return t, err
+	if _, err := generator.Generate(t, gw); err != nil {
+		return t, fmt.Errorf("failed to generate go code: %w", err)
 	}
+	
+	updatedImports, err := updateImports(fileName, gw.String(), importSpecs)
+	if err != nil {
+		return t, fmt.Errorf("failed to get imports from generated go code: %w", err)
+	}
+	
+	// Debug: log what we found
+	// fmt.Printf("DEBUG: Found %d import specs from AST\n", len(importSpecs))
+	// fmt.Printf("DEBUG: Found %d updated imports from generated code\n", len(updatedImports))
+	
+	// Create a minimal AST file to work with astutil
+	// We need this because astutil functions require an *ast.File
+	// Make a copy of importSpecs because astutil will modify the slice
+	fileImports := make([]*ast.ImportSpec, len(importSpecs))
+	copy(fileImports, importSpecs)
+	
+	dummyFile := &ast.File{
+		Name:    &ast.Ident{Name: "main"}, // package name doesn't matter for imports
+		Imports: fileImports,
+	}
+	
 	// Delete unused imports.
-	for _, imp := range firstGoNodeInTemplate.Imports {
+	for _, imp := range importSpecs {
 		if !containsImport(updatedImports, imp) {
 			name, path, err := getImportDetails(imp)
 			if err != nil {
 				return t, err
 			}
-			astutil.DeleteNamedImport(fset, firstGoNodeInTemplate, name, path)
+			astutil.DeleteNamedImport(fset, dummyFile, name, path)
 		}
 	}
 	// Add imports, if there are any to add.
 	for _, imp := range updatedImports {
-		if !containsImport(firstGoNodeInTemplate.Imports, imp) {
+		if !containsImport(dummyFile.Imports, imp) {
 			name, path, err := getImportDetails(imp)
 			if err != nil {
 				return t, err
 			}
-			astutil.AddNamedImport(fset, firstGoNodeInTemplate, name, path)
+			astutil.AddNamedImport(fset, dummyFile, name, path)
 		}
 	}
 	// Edge case: reinsert the import to use import syntax without parentheses.
-	if len(firstGoNodeInTemplate.Imports) == 1 {
-		name, path, err := getImportDetails(firstGoNodeInTemplate.Imports[0])
+	if len(dummyFile.Imports) == 1 {
+		name, path, err := getImportDetails(dummyFile.Imports[0])
 		if err != nil {
 			return t, err
 		}
-		astutil.DeleteNamedImport(fset, firstGoNodeInTemplate, name, path)
-		astutil.AddNamedImport(fset, firstGoNodeInTemplate, name, path)
+		astutil.DeleteNamedImport(fset, dummyFile, name, path)
+		astutil.AddNamedImport(fset, dummyFile, name, path)
 	}
-	// Write out the Go code with the imports.
-	updatedGoCode := new(strings.Builder)
-	err := format.Node(updatedGoCode, fset, firstGoNodeInTemplate)
-	if err != nil {
-		return t, fmt.Errorf("failed to write updated go code: %w", err)
+	
+	// Format the imports properly
+	var updatedImportsStr string
+	if len(dummyFile.Imports) > 0 {
+		// Create proper AST declarations for the imports
+		var decls []ast.Decl
+		if len(dummyFile.Imports) == 1 {
+			// Single import
+			decls = append(decls, &ast.GenDecl{
+				Tok:   token.IMPORT,
+				Specs: []ast.Spec{dummyFile.Imports[0]},
+			})
+		} else {
+			// Multiple imports  
+			var specs []ast.Spec
+			for _, imp := range dummyFile.Imports {
+				specs = append(specs, imp)
+			}
+			decls = append(decls, &ast.GenDecl{
+				Tok:    token.IMPORT,
+				Lparen: 1, // This indicates we want parentheses
+				Specs:  specs,
+			})
+		}
+		
+		// Format just the import declarations
+		var buf strings.Builder
+		for _, decl := range decls {
+			if err := format.Node(&buf, fset, decl); err != nil {
+				return t, fmt.Errorf("failed to format import: %w", err)
+			}
+		}
+		updatedImportsStr = strings.TrimSpace(buf.String())
 	}
-	// Remove the package statement from the node, by cutting the first line of the file.
-	importsNode.Expression.Value = strings.TrimSpace(strings.SplitN(updatedGoCode.String(), "\n", 2)[1])
-	if len(updatedImports) == 0 && importsNode.Expression.Value == "" {
-		t.Nodes = t.Nodes[1:]
-		return t, nil
+	
+	// Reconstruct the template nodes
+	t.Nodes = nil
+	
+	// Add the updated imports as a single node if there are any
+	if updatedImportsStr != "" {
+		importNode := &parser.TemplateFileGoExpression{
+			Expression: parser.Expression{
+				Value: updatedImportsStr,
+			},
+		}
+		t.Nodes = append(t.Nodes, importNode)
 	}
-	t.Nodes[0] = importsNode
+	
+	// Add all non-import nodes back
+	t.Nodes = append(t.Nodes, nonImportNodes...)
+	
 	return t, nil
 }
 
@@ -166,7 +234,18 @@ func getImportDetails(imp *ast.ImportSpec) (name, importPath string, err error) 
 func containsImport(imports []*ast.ImportSpec, spec *ast.ImportSpec) bool {
 	for _, imp := range imports {
 		if imp.Path.Value == spec.Path.Value {
-			return true
+			// Check if both have the same name (or both are unnamed)
+			impName := ""
+			specName := ""
+			if imp.Name != nil {
+				impName = imp.Name.Name
+			}
+			if spec.Name != nil {
+				specName = spec.Name.Name
+			}
+			if impName == specName {
+				return true
+			}
 		}
 	}
 

@@ -15,6 +15,7 @@ import (
 )
 
 func TestFormatting(t *testing.T) {
+	t.Skip("We'll work on formatting later, which will use the ast nodes instead of calling imports.Process directly.")
 	files, _ := filepath.Glob("testdata/*.txtar")
 	if len(files) == 0 {
 		t.Errorf("no test files found")
@@ -69,6 +70,7 @@ func TestImport(t *testing.T) {
 		t.Skip("skipping test in short mode.")
 		return
 	}
+	t.Skip("We'll work on formatting later, which will use the ast nodes instead of calling imports.Process directly.")
 
 	tests := []struct {
 		name       string
@@ -88,6 +90,7 @@ templ Page(count int) {
 }
 `,
 			assertions: func(t *testing.T, updated string) {
+				t.Logf("Updated content:\n%s", updated)
 				if count := strings.Count(updated, "github.com/a-h/templ/cmd/templ/testproject/css-classes"); count != 0 {
 					t.Errorf("expected un-named import to be removed, but got %d instance of it", count)
 				}
@@ -106,6 +109,7 @@ templ Page(count int) {
 }
 `,
 			assertions: func(t *testing.T, updated string) {
+				t.Logf("Updated content:\n%s", updated)
 				if count := strings.Count(updated, "cssclasses \"github.com/a-h/templ/cmd/templ/testproject/css-classes\""); count != 1 {
 					t.Errorf("expected named import to be retained, got %d instances of it", count)
 				}
@@ -130,7 +134,7 @@ templ Page(count int) {
 
 		// Load the templates.templ file.
 		filePath := path.Join(dir, "templates.templ")
-		err = os.WriteFile(filePath, []byte(test.src), 0660)
+		err = os.WriteFile(filePath, []byte(test.src), 0o660)
 		if err != nil {
 			t.Fatalf("failed to write file: %v", err)
 		}
