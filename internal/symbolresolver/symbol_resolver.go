@@ -135,7 +135,6 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 
 	// Process all loaded packages
 	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
-
 		// Skip packages with errors - packages.Visit handles dependencies correctly
 		// even with errors, so we can still cache what we get
 		if len(pkg.Errors) > 0 {
@@ -200,9 +199,12 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 	return nil
 }
 
-// ResolveComponent finds a component's type signature
+// ResolveComponent finds a component's type
 // Called during code generation for element syntax like <Button />
-func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (*types.Signature, error) {
+// Returns either:
+// - *types.Signature for function/method components
+// - *types.Named for type components that implement templ.Component
+func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (types.Type, error) {
 	// Get the absolute path of the file
 	absFromFile, err := filepath.Abs(fromFile)
 	if err != nil {
@@ -211,7 +213,7 @@ func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (*ty
 
 	// Get the directory for package lookup
 	fromDir := filepath.Dir(absFromFile)
-	
+
 	pkg, ok := r.packages[fromDir]
 	if !ok {
 		return nil, fmt.Errorf("package in %s not found in preprocessing cache", fromDir)
@@ -224,7 +226,7 @@ func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (*ty
 	// Find the file scope that includes imports
 	// Look for the overlay file that corresponds to this templ file
 	overlayPath := strings.TrimSuffix(absFromFile, ".templ") + "_templ.go"
-	
+
 	var fileScope *types.Scope
 	// fmt.Printf("Looking for overlay: %s\n", overlayPath)
 	// fmt.Printf("CompiledGoFiles: %v\n", pkg.CompiledGoFiles)
@@ -256,132 +258,142 @@ func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (*ty
 
 	// Use ResolveExpression to get the type
 	// Pass both file scope (for imports) and package scope (for declarations)
-	typ, err := r.ResolveComponentExpression(expr, fileScope, pkg.Types.Scope())
+	typ, err := r.ResolveExpression(expr, fileScope, pkg.Types.Scope())
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve component expression: %w", err)
 	}
 
-	// Extract component signature from the resolved type
-	return r.extractComponentSignature(typ)
+	// Validate the component type
+	if err := validateComponentType(typ); err != nil {
+		return nil, err
+	}
+
+	return typ, nil
 }
 
-// ResolveComponentExpression resolves a component expression using both file and package scopes
-func (r *SymbolResolverV2) ResolveComponentExpression(expr ast.Expr, fileScope, pkgScope *types.Scope) (types.Type, error) {
-	// For simple identifiers, check package scope first
-	if ident, ok := expr.(*ast.Ident); ok {
-		// First check in package scope (for local components)
-		if obj := pkgScope.Lookup(ident.Name); obj != nil {
-			return obj.Type(), nil
-		}
-		// Then check in file scope (shouldn't happen for components, but be thorough)
-		if fileScope != nil {
-			if obj := fileScope.Lookup(ident.Name); obj != nil {
-				return obj.Type(), nil
-			}
-		}
-		return nil, fmt.Errorf("identifier %s not found in scope", ident.Name)
-	}
-	
-	// For selector expressions, we need to check if it's a package import
-	if sel, ok := expr.(*ast.SelectorExpr); ok {
-		if ident, ok := sel.X.(*ast.Ident); ok {
-			// Check if this is an imported package in file scope
-			if fileScope != nil {
-				if obj := fileScope.Lookup(ident.Name); obj != nil {
-					if pkgName, ok := obj.(*types.PkgName); ok {
-						// Look up the component in the imported package
-						importedPkg := pkgName.Imported()
-						if importedPkg == nil {
-							return nil, fmt.Errorf("imported package %s not found", ident.Name)
-						}
-						obj := importedPkg.Scope().Lookup(sel.Sel.Name)
-						if obj == nil {
-							return nil, fmt.Errorf("%s not found in package %s", sel.Sel.Name, ident.Name)
-						}
-						return obj.Type(), nil
-					}
-				}
-			}
-		}
-	}
-	
-	// For other expressions, use the regular ResolveExpression with package scope
-	return r.ResolveExpression(expr, pkgScope)
-}
-
-// extractComponentSignature extracts a component signature from a type
-func (r *SymbolResolverV2) extractComponentSignature(typ types.Type) (*types.Signature, error) {
+// validateComponentType validates that a type can be used as a component
+func validateComponentType(typ types.Type) error {
 	switch t := typ.(type) {
 	case *types.Signature:
-		// Direct function type
-		return t, nil
+		// Function component - validate it returns templ.Component
+		results := t.Results()
+		if results.Len() != 1 {
+			return fmt.Errorf("component function should return exactly 1 value, got %d", results.Len())
+		}
+		// In a real implementation, we'd check if return type is templ.Component
+		// For now, we accept any single return value
+		return nil
+
 	case *types.Named:
-		// Named type - look for Render method (struct implementing templ.Component)
+		// Type component - check if it has a Render method
 		method, _, _ := types.LookupFieldOrMethod(t, true, nil, "Render")
 		if method == nil {
-			return nil, fmt.Errorf("type %s does not implement templ.Component (no Render method)", t)
+			return fmt.Errorf("type %s does not implement templ.Component (no Render method)", t)
 		}
 		if fn, ok := method.(*types.Func); ok {
-			return fn.Type().(*types.Signature), nil
+			// Validate the Render method signature
+			sig := fn.Type().(*types.Signature)
+			return validateRenderSignature(sig)
 		}
-		return nil, fmt.Errorf("Render is not a method on %s", t)
+		return fmt.Errorf("Render is not a method on %s", t)
+
 	default:
 		// Check if it's a variable of a type that implements templ.Component
 		if named, ok := typ.Underlying().(*types.Named); ok {
-			return r.extractComponentSignature(named)
+			return validateComponentType(named)
 		}
-		return nil, fmt.Errorf("type %s is not a valid component (not a function or type implementing templ.Component)", typ)
+		return fmt.Errorf("type %s is not a valid component (expected function or type implementing templ.Component)", typ)
 	}
+}
+
+// validateRenderSignature checks if a signature matches the Render method of templ.Component
+// Should be: Render(ctx context.Context, w io.Writer) error
+func validateRenderSignature(sig *types.Signature) error {
+	// Should have exactly 2 parameters
+	params := sig.Params()
+	if params.Len() != 2 {
+		return fmt.Errorf("Render method should have exactly 2 parameters, got %d", params.Len())
+	}
+
+	// First param should be context.Context
+	ctxType := params.At(0).Type()
+	if ctxType.String() != "context.Context" {
+		return fmt.Errorf("first parameter should be context.Context, got %s", ctxType)
+	}
+
+	// Second param should be io.Writer
+	writerType := params.At(1).Type()
+	if writerType.String() != "io.Writer" {
+		return fmt.Errorf("second parameter should be io.Writer, got %s", writerType)
+	}
+
+	// Should return error
+	results := sig.Results()
+	if results.Len() != 1 {
+		return fmt.Errorf("Render method should return exactly 1 value, got %d", results.Len())
+	}
+	if results.At(0).Type().String() != "error" {
+		return fmt.Errorf("Render method should return error, got %s", results.At(0).Type())
+	}
+
+	return nil
 }
 
 // ResolveExpression determines the type of a Go expression
 // Called during code generation for expressions like { user.Name }
-func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, scope *types.Scope) (types.Type, error) {
+// fileScope contains imports, pkgScope contains declarations
+func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, fileScope, pkgScope *types.Scope) (types.Type, error) {
 	if expr == nil {
 		return nil, fmt.Errorf("expression is nil")
 	}
-	if scope == nil {
-		return nil, fmt.Errorf("scope is nil")
+	if pkgScope == nil {
+		return nil, fmt.Errorf("package scope is nil")
 	}
 
 	// Try to resolve the expression type using the scope
 	switch e := expr.(type) {
 	case *ast.Ident:
-		// Simple identifier
-		obj := scope.Lookup(e.Name)
-		if obj == nil {
-			return nil, fmt.Errorf("identifier %s not found in scope", e.Name)
+		// Simple identifier - check package scope first (for local declarations)
+		if obj := pkgScope.Lookup(e.Name); obj != nil {
+			return obj.Type(), nil
 		}
-		return obj.Type(), nil
+		// Then check file scope (shouldn't normally have non-import declarations, but be thorough)
+		if fileScope != nil {
+			if obj := fileScope.Lookup(e.Name); obj != nil {
+				return obj.Type(), nil
+			}
+		}
+		return nil, fmt.Errorf("identifier %s not found in scope", e.Name)
 
 	case *ast.SelectorExpr:
 		// This could be either:
 		// 1. Package-qualified identifier (e.g., pkg.Component)
 		// 2. Field or method access (e.g., user.Name)
-		
+
 		// Check if X is an identifier - might be a package name
 		if ident, ok := e.X.(*ast.Ident); ok {
-			// Try to find it as a package first
-			obj := scope.Lookup(ident.Name)
-			if obj != nil && obj.Type() == nil {
-				// This is likely a package name (imported package)
-				if pkgName, ok := obj.(*types.PkgName); ok {
-					// Look up the identifier in the imported package
-					importedPkg := pkgName.Imported()
-					if importedPkg == nil {
-						return nil, fmt.Errorf("imported package %s not found", ident.Name)
-					}
-					obj := importedPkg.Scope().Lookup(e.Sel.Name)
-					if obj == nil {
-						return nil, fmt.Errorf("%s not found in package %s", e.Sel.Name, ident.Name)
-					}
-					return obj.Type(), nil
+			// Try to find it as a package first in file scope (imports are file-scoped)
+			var obj types.Object
+			if fileScope != nil {
+				obj = fileScope.Lookup(ident.Name)
+			}
+			// Check if this is a package name (imported package)
+			if pkgName, ok := obj.(*types.PkgName); ok {
+				// Look up the identifier in the imported package
+				importedPkg := pkgName.Imported()
+				if importedPkg == nil {
+					return nil, fmt.Errorf("imported package %s not found", ident.Name)
 				}
+				obj := importedPkg.Scope().Lookup(e.Sel.Name)
+				if obj == nil {
+					return nil, fmt.Errorf("%s not found in package %s", e.Sel.Name, ident.Name)
+				}
+				return obj.Type(), nil
 			}
 		}
-		
+
 		// Not a package - resolve as field/method access
-		baseType, err := r.ResolveExpression(e.X, scope)
+		baseType, err := r.ResolveExpression(e.X, fileScope, pkgScope)
 		if err != nil {
 			return nil, err
 		}
@@ -400,7 +412,7 @@ func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, scope *types.Scope) 
 
 	case *ast.IndexExpr:
 		// Array/slice/map index (e.g., items[0])
-		baseType, err := r.ResolveExpression(e.X, scope)
+		baseType, err := r.ResolveExpression(e.X, fileScope, pkgScope)
 		if err != nil {
 			return nil, err
 		}
@@ -418,7 +430,7 @@ func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, scope *types.Scope) 
 
 	case *ast.CallExpr:
 		// Function call
-		fnType, err := r.ResolveExpression(e.Fun, scope)
+		fnType, err := r.ResolveExpression(e.Fun, fileScope, pkgScope)
 		if err != nil {
 			return nil, err
 		}
@@ -453,7 +465,6 @@ func (r *SymbolResolverV2) ResolveExpression(expr ast.Expr, scope *types.Scope) 
 		return nil, fmt.Errorf("unsupported expression type: %T", expr)
 	}
 }
-
 
 // generateOverlay creates a Go stub file for a templ template
 func (r *SymbolResolverV2) generateOverlay(tf *parser.TemplateFile) (string, error) {

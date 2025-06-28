@@ -146,13 +146,20 @@ templ EmptyComponent() {
 			}
 
 			// Resolve the component
-			sig, err := env.resolver.ResolveComponent(templPath, expr)
+			typ, err := env.resolver.ResolveComponent(templPath, expr)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ResolveComponent() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 
-			if !tt.wantErr && sig != nil {
+			if !tt.wantErr && typ != nil {
+				// Check if it's a function signature
+				sig, ok := typ.(*types.Signature)
+				if !ok {
+					// Could be a type component, skip parameter checking
+					return
+				}
+				
 				// Check parameter names
 				params := sig.Params()
 				if params.Len() != len(tt.wantParams) {
@@ -237,8 +244,8 @@ func testFunc() {
 				t.Fatalf("failed to parse expression: %v", err)
 			}
 
-			// Resolve using package scope
-			typ, err := env.resolver.ResolveExpression(expr, pkg.Scope())
+			// Resolve using package scope (no file scope needed for these tests)
+			typ, err := env.resolver.ResolveExpression(expr, nil, pkg.Scope())
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ResolveExpression() error = %v, wantErr %v", err, tt.wantErr)
 				return

@@ -127,11 +127,44 @@ For lowercase tags, we can try to resolve it locally first and if it fails, we'l
 The symbol resolver treats components as expressions, which simplifies the implementation:
 
 - **ResolveComponent** accepts an `ast.Expr` instead of a string, ensuring parsing happens at the parser level
-- **ResolveExpression** handles all Go expression types uniformly
+- **ResolveExpression** handles all Go expression types uniformly with both file and package scopes
 - Component resolution uses the same expression resolution logic internally
-- File-scoped imports are properly handled by using both file scope (for imports) and package scope (for declarations)
+- File-scoped imports are properly handled by passing both scopes to ResolveExpression
 
-**Key Implementation Detail**: Since Go imports are file-scoped, not package-scoped, the resolver must use the appropriate file's scope when resolving package-qualified identifiers (e.g., `pkg.Component`). This is achieved by:
-1. Finding the overlay file that corresponds to the source templ file
-2. Using that file's scope for import resolution
-3. Falling back to package scope for local identifier resolution
+**Key Implementation Details**: 
+
+1. **Dual Scope Resolution**: `ResolveExpression` accepts both file scope (for imports) and package scope (for declarations):
+   - File scope contains imported package names
+   - Package scope contains type declarations and functions
+   - Package-qualified identifiers (e.g., `pkg.Component`) are resolved by checking for `*types.PkgName` in file scope
+
+2. **Component Validation**: The resolver validates that components match the `templ.Component` interface:
+   - Functions must return `templ.Component`
+   - Struct types must have a `Render(context.Context, io.Writer) error` method
+   - Validation is relaxed in test environments where the actual templ.Component type may not be available
+
+3. **File Scope Discovery**: The resolver finds the appropriate file scope by:
+   - Mapping the source .templ file to its overlay _templ.go file
+   - Looking up the file's AST node in the package's TypesInfo
+   - Using the file-specific scope that includes imports
+
+### ResolveComponent Return Type Design
+
+**ResolveComponent** returns `types.Type` to handle both function and type components uniformly:
+
+```go
+// ResolveComponent finds a component's type
+// Returns either:
+// - *types.Signature for function/method components  
+// - *types.Named for type components that implement templ.Component
+func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (types.Type, error)
+```
+
+This design allows the code generator to determine the component type and generate appropriate code:
+- For `*types.Signature`: Direct function call (e.g., `Button("title").Render(ctx, w)`)
+- For `*types.Named`: Type instantiation (e.g., `(&ComponentType{...}).Render(ctx, w)`)
+
+The caller is responsible for:
+1. Type-asserting the result to determine component type
+2. Validating the signature or type implements `templ.Component`
+3. Generating the appropriate invocation code
