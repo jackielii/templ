@@ -89,7 +89,7 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 		if err := r.loadPackagesForModule(moduleRoot, packageDirs); err != nil {
 			// Continue with other modules - one module's failure shouldn't stop others
 			// The error is already descriptive from loadPackagesForModule
-			fmt.Printf("Error loading packages for module %s: %v\n", moduleRoot, err)
+			// fmt.Printf("Error loading packages for module %s: %v\n", moduleRoot, err)
 			_ = err
 		}
 	}
@@ -123,7 +123,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 			patterns = append(patterns, "./"+relPath)
 		}
 	}
-	fmt.Printf("Loading packages from %s with patterns: %v\n", moduleRoot, patterns)
+	// fmt.Printf("Loading packages from %s with patterns: %v\n", moduleRoot, patterns)
 
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil && len(pkgs) == 0 {
@@ -136,13 +136,13 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 	// Process all loaded packages
 	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
 		// Debug: log packages being loaded
-		fmt.Printf("Loaded package: %s (path: %s, ID: %s, hasTypes: %v)\n", pkg.Name, pkg.PkgPath, pkg.ID, pkg.Types != nil)
+		// fmt.Printf("Loaded package: %s (path: %s, ID: %s, hasTypes: %v)\n", pkg.Name, pkg.PkgPath, pkg.ID, pkg.Types != nil)
 		// Skip packages with errors - packages.Visit handles dependencies correctly
 		// even with errors, so we can still cache what we get
 		if len(pkg.Errors) > 0 {
 			// Log errors for debugging but don't skip the package
 			// Most errors are benign (e.g., unused imports in overlays)
-			fmt.Printf("Package %s has errors: %v\n", pkg.ID, pkg.Errors)
+			// fmt.Printf("Package %s has errors: %v\n", pkg.ID, pkg.Errors)
 		}
 
 		// Cache by package path if available
@@ -184,7 +184,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 				if pkgDir == dir {
 					if pkg, ok := r.packages[pkgPath]; ok {
 						r.packages[dir] = pkg
-						fmt.Printf("Cached package %s for directory %s\n", pkgPath, dir)
+						// fmt.Printf("Cached package %s for directory %s\n", pkgPath, dir)
 						found = true
 						break
 					}
@@ -198,7 +198,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 		if !found {
 			// If we still can't find a package, it might be due to edge cases
 			// in how packages.Load reports directory mappings
-			fmt.Printf("Warning: could not find package for directory %s\n", dir)
+			// fmt.Printf("Warning: could not find package for directory %s\n", dir)
 		}
 	}
 
@@ -286,12 +286,12 @@ func (r *SymbolResolverV2) validateComponentType(typ types.Type) error {
 		// Recursively validate the return type
 		resultType := results.At(0).Type()
 		// Debug: log the result type
-		fmt.Printf("Function returns: %s (underlying: %T)\n", resultType, resultType)
+		// fmt.Printf("Function returns: %s (underlying: %T)\n", resultType, resultType)
 
 		// Special case: if the return type is templ.Component, it's valid
 		if named, ok := resultType.(*types.Named); ok {
 			if named.Obj() != nil && named.Obj().Pkg() != nil {
-				fmt.Printf("  Return type package: %s, name: %s\n", named.Obj().Pkg().Path(), named.Obj().Name())
+				// fmt.Printf("  Return type package: %s, name: %s\n", named.Obj().Pkg().Path(), named.Obj().Name())
 			}
 		}
 
@@ -335,9 +335,9 @@ func (r *SymbolResolverV2) validateComponentType(typ types.Type) error {
 		return fmt.Errorf("Render is not a method")
 
 	case *types.Basic:
-		fmt.Printf("Basic type: %s, Kind: %v\n", t, t.Kind())
+		// fmt.Printf("Basic type: %s, Kind: %v\n", t, t.Kind())
 		if t.Kind() == types.Invalid {
-			fmt.Printf("  Invalid type detected - this suggests package loading issues\n")
+			// fmt.Printf("  Invalid type detected - this suggests package loading issues\n")
 		}
 		return fmt.Errorf("basic type %s cannot be a component", t)
 
