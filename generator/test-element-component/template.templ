@@ -70,8 +70,8 @@ templ ElementComponent(attrs templ.Attributer) {
 			}
 			enabled?={ isEnabled() }
 		/>
-		<intComp />
-		<IntComponent(42) />
+		<intComp></intComp>
+		<IntComponent value={ 42 } />
 		<TestNestedComponents
 			content={
 				<span>nested</span>
@@ -87,6 +87,7 @@ templ ElementComponent(attrs templ.Attributer) {
 }
 
 var structComp StructComponent
+
 var intComp IntComponent = 42
 
 templ Container(child templ.Component) {
