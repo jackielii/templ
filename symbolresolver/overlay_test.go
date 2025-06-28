@@ -151,8 +151,7 @@ templ Component(msg Message) {
 			}
 
 			// Create resolver and generate overlay
-			resolver := NewSymbolResolverV2()
-			overlay, err := resolver.generateOverlay(tf)
+			overlay, err := generateOverlay(tf)
 			if err != nil {
 				t.Fatalf("Failed to generate overlay: %v", err)
 			}
@@ -166,4 +165,3 @@ templ Component(msg Message) {
 		})
 	}
 }
-
