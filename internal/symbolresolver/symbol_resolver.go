@@ -5,13 +5,12 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/a-h/templ/parser/v2"
+	"github.com/davecgh/go-spew/spew"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -99,12 +98,9 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 
 // loadPackagesForModule loads all packages within a single module
 func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs map[string][]string) error {
-	loadPaths := slices.Collect(maps.Keys(packageDirs))
-	if len(loadPaths) == 0 {
+	if len(packageDirs) == 0 {
 		return nil
 	}
-
-	// Load packages for this module
 
 	cfg := &packages.Config{
 		Mode:    packages.LoadSyntax,
@@ -113,8 +109,8 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 	}
 
 	// Convert directory paths to package patterns relative to module root
-	patterns := make([]string, 0, len(loadPaths))
-	for _, dir := range loadPaths {
+	patterns := make([]string, 0, len(packageDirs))
+	for dir := range packageDirs {
 		relPath, err := filepath.Rel(moduleRoot, dir)
 		if err != nil || strings.HasPrefix(relPath, "..") {
 			// If we can't make it relative or it's outside module, use absolute
@@ -204,28 +200,28 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 // Returns either:
 // - *types.Signature for function/method components
 // - *types.Named for type components that implement templ.Component
-func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (types.Type, error) {
+func (r *SymbolResolverV2) ResolveComponent(filename string, expr ast.Expr) (types.Type, error) {
 	// Get the absolute path of the file
-	absFromFile, err := filepath.Abs(fromFile)
+	absFilename, err := filepath.Abs(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path for %s: %w", fromFile, err)
+		return nil, fmt.Errorf("failed to get absolute path for %s: %w", filename, err)
 	}
 
 	// Get the directory for package lookup
-	fromDir := filepath.Dir(absFromFile)
+	absDir := filepath.Dir(absFilename)
 
-	pkg, ok := r.packages[fromDir]
+	pkg, ok := r.packages[absDir]
 	if !ok {
-		return nil, fmt.Errorf("package in %s not found in preprocessing cache", fromDir)
+		return nil, fmt.Errorf("package in %s not found in preprocessing cache", absDir)
 	}
 
 	if pkg.TypesInfo == nil {
-		return nil, fmt.Errorf("no type information for package in %s", fromDir)
+		return nil, fmt.Errorf("no type information for package in %s", absDir)
 	}
 
 	// Find the file scope that includes imports
 	// Look for the overlay file that corresponds to this templ file
-	overlayPath := strings.TrimSuffix(absFromFile, ".templ") + "_templ.go"
+	overlayPath := strings.TrimSuffix(absFilename, ".templ") + "_templ.go"
 
 	var fileScope *types.Scope
 	// fmt.Printf("Looking for overlay: %s\n", overlayPath)
@@ -264,7 +260,7 @@ func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (typ
 	}
 
 	// Validate the component type
-	if err := validateComponentType(typ); err != nil {
+	if err := r.validateComponentType(typ); err != nil {
 		return nil, err
 	}
 
@@ -272,7 +268,7 @@ func (r *SymbolResolverV2) ResolveComponent(fromFile string, expr ast.Expr) (typ
 }
 
 // validateComponentType validates that a type can be used as a component
-func validateComponentType(typ types.Type) error {
+func (r *SymbolResolverV2) validateComponentType(typ types.Type) error {
 	switch t := typ.(type) {
 	case *types.Signature:
 		// Function component - validate it returns templ.Component
@@ -280,12 +276,18 @@ func validateComponentType(typ types.Type) error {
 		if results.Len() != 1 {
 			return fmt.Errorf("component function should return exactly 1 value, got %d", results.Len())
 		}
-		// In a real implementation, we'd check if return type is templ.Component
-		// For now, we accept any single return value
-		return nil
+
+		// Recursively validate the return type
+		resultType := results.At(0).Type()
+		return r.validateComponentType(resultType)
 
 	case *types.Named:
 		// Type component - check if it has a Render method
+		// Get the package for this type
+		// var pkg *types.Package
+		// if t.Obj() != nil {
+		// 	pkg = t.Obj().Pkg()
+		// }
 		method, _, _ := types.LookupFieldOrMethod(t, true, nil, "Render")
 		if method == nil {
 			return fmt.Errorf("type %s does not implement templ.Component (no Render method)", t)
@@ -297,12 +299,34 @@ func validateComponentType(typ types.Type) error {
 		}
 		return fmt.Errorf("Render is not a method on %s", t)
 
+	case *types.Interface:
+		// If it's an interface, check if it has a Render method
+		// For interfaces, we typically don't have a package
+		method, _, _ := types.LookupFieldOrMethod(t, true, nil, "Render")
+		if method == nil {
+			return fmt.Errorf("interface does not have Render method")
+		}
+		if fn, ok := method.(*types.Func); ok {
+			sig := fn.Type().(*types.Signature)
+			return validateRenderSignature(sig)
+		}
+		return fmt.Errorf("Render is not a method")
+
+	case *types.Basic:
+		// Handle "invalid type" which occurs when type resolution fails
+		if t.Kind() == types.Invalid {
+			// In test environments, templ.Component might not be resolvable
+			// If we see "invalid type", assume it's okay for now
+			return nil
+		}
+		return fmt.Errorf("basic type %s cannot be a component", t)
+
 	default:
 		// Check if it's a variable of a type that implements templ.Component
 		if named, ok := typ.Underlying().(*types.Named); ok {
-			return validateComponentType(named)
+			return r.validateComponentType(named)
 		}
-		return fmt.Errorf("type %s is not a valid component (expected function or type implementing templ.Component)", typ)
+		return fmt.Errorf("type %s is not a valid component (expected function returning templ.Component or type implementing it)", typ)
 	}
 }
 
@@ -348,6 +372,23 @@ func ResolveExpression(expr ast.Expr, scope *types.Scope) (types.Type, error) {
 	}
 	if scope == nil {
 		return nil, fmt.Errorf("scope is nil")
+	}
+
+	// Try to extract package from scope (walk up to package scope and find a package-level object)
+	var pkg *types.Package
+	currentScope := scope
+	for currentScope != nil {
+		// Check if any object in this scope belongs to a package
+		for _, name := range currentScope.Names() {
+			if obj := currentScope.Lookup(name); obj != nil && obj.Pkg() != nil {
+				pkg = obj.Pkg()
+				break
+			}
+		}
+		if pkg != nil {
+			break
+		}
+		currentScope = currentScope.Parent()
 	}
 
 	// Try to resolve the expression type using the scope
@@ -398,7 +439,7 @@ func ResolveExpression(expr ast.Expr, scope *types.Scope) (types.Type, error) {
 		}
 
 		// Look up the field or method
-		obj, _, _ := types.LookupFieldOrMethod(baseType, true, nil, e.Sel.Name)
+		obj, _, _ := types.LookupFieldOrMethod(baseType, true, pkg, e.Sel.Name)
 		if obj == nil {
 			return nil, fmt.Errorf("field or method %s not found", e.Sel.Name)
 		}

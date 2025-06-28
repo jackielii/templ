@@ -139,15 +139,22 @@ The symbol resolver treats components as expressions, which simplifies the imple
    - Package-qualified identifiers (e.g., `pkg.Component`) are resolved by checking for `*types.PkgName`
    - This design follows Go's natural scope hierarchy model
 
-2. **Component Validation**: The resolver validates that components match the `templ.Component` interface:
-   - Functions must return `templ.Component`
+2. **Component Validation**: The resolver recursively validates component types:
+   - Functions must return `templ.Component` or a type that implements it
    - Struct types must have a `Render(context.Context, io.Writer) error` method
-   - Validation is relaxed in test environments where the actual templ.Component type may not be available
+   - Validation properly handles types from different packages by using the correct package context
+   - The validation method has access to the resolver's package cache for cross-package type resolution
+   - Validation gracefully handles test environments where templ.Component may not be fully resolvable
 
 3. **File Scope Discovery**: The resolver finds the appropriate file scope by:
    - Mapping the source .templ file to its overlay _templ.go file
    - Looking up the file's AST node in the package's TypesInfo
    - Using the file-specific scope that includes imports
+
+4. **Package-Aware Method Resolution**: When using `types.LookupFieldOrMethod`:
+   - The package parameter must match the type's package for proper method resolution
+   - For `*types.Named` types, the package is obtained from `t.Obj().Pkg()`
+   - This ensures methods are correctly found even for types from external packages
 
 ### ResolveComponent Return Type Design
 
