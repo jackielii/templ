@@ -98,6 +98,7 @@ func TestSymbolResolverV2_ResolveComponent(t *testing.T) {
 		setupFiles    map[string]string // additional files to set up
 		wantParams    []string          // parameter names
 		wantErr       bool
+		isTypeComponent bool            // true if it's a type that implements Component
 	}{
 		{
 			name:          "local component",
@@ -120,6 +121,32 @@ templ EmptyComponent() {
 }`,
 			wantParams: []string{},
 			wantErr:    false,
+		},
+		{
+			name:          "basic type implementing Component",
+			componentName: "intComp",
+			templFile: `package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+)
+
+type IntComponent int
+
+func (i IntComponent) Render(ctx context.Context, w io.Writer) error {
+	_, err := fmt.Fprintf(w, "<span>%d</span>", i)
+	return err
+}
+
+var intComp IntComponent = 42
+
+templ TestComponent() {
+	<div>Test</div>
+}`,
+			wantErr:         false,
+			isTypeComponent: true,
 		},
 	}
 
@@ -154,6 +181,15 @@ templ EmptyComponent() {
 			}
 
 			if !tt.wantErr && typ != nil {
+				if tt.isTypeComponent {
+					// For type components, verify it's a Named type
+					_, ok := typ.(*types.Named)
+					if !ok {
+						t.Errorf("expected *types.Named for type component, got %T", typ)
+					}
+					return
+				}
+
 				// Check if it's a function signature
 				sig, ok := typ.(*types.Signature)
 				if !ok {

@@ -70,6 +70,8 @@ templ ElementComponent(attrs templ.Attributer) {
 			}
 			enabled?={ isEnabled() }
 		/>
+		<intComp />
+		<IntComponent(42) />
 		<TestNestedComponents
 			content={
 				<span>nested</span>
@@ -85,6 +87,7 @@ templ ElementComponent(attrs templ.Attributer) {
 }
 
 var structComp StructComponent
+var intComp IntComponent = 42
 
 templ Container(child templ.Component) {
 	<div class="container">
@@ -193,4 +196,11 @@ templ TestNestedComponents(content templ.Component) {
 
 templ Count(i int) {
 	<span>{ i }</span>
+}
+
+type IntComponent int
+
+func (i IntComponent) Render(ctx context.Context, w io.Writer) (err error) {
+	_, err = fmt.Fprintf(w, "<span>IntComponent: %d</span>", i)
+	return
 }

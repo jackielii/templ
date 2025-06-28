@@ -180,6 +180,20 @@ func TestIntegration_GeneratorDirectory(t *testing.T) {
 			},
 		},
 		{
+			name:          "Basic type implementing Component",
+			componentName: "intComp",
+			fromDir:       filepath.Dir(filepath.Join(generatorDir, "test-element-component", "template.templ")),
+			expectedParams: []struct {
+				name string
+				typ  string
+			}{
+				// This is a type component (IntComponent), not a function
+				// So it should have Render method params
+				{"ctx", "context.Context"},
+				{"w", "io.Writer"},
+			},
+		},
+		{
 			name:          "Non-existent component",
 			componentName: "NonExistent",
 			fromDir:       filepath.Dir(filepath.Join(generatorDir, "test-element-component", "template.templ")),
