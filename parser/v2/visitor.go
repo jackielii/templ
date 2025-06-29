@@ -26,7 +26,6 @@ type Visitor interface {
 	VisitHTMLComment(*HTMLComment) error
 	VisitCallTemplateExpression(*CallTemplateExpression) error
 	VisitTemplElementExpression(*TemplElementExpression) error
-	VisitElementComponent(*ElementComponent) error
 	VisitChildrenExpression(*ChildrenExpression) error
 	VisitIfExpression(*IfExpression) error
 	VisitSwitchExpression(*SwitchExpression) error

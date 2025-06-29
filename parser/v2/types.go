@@ -495,6 +495,7 @@ func (t *Text) Visit(v Visitor) error {
 }
 
 // <a .../> or <div ...>...</div>
+// Also represents component elements like <Button /> or <pkg.Component />
 type Element struct {
 	Name           string
 	Attributes     []Attribute
@@ -503,6 +504,10 @@ type Element struct {
 	IndentChildren bool
 	TrailingSpace  TrailingSpace
 	NameRange      Range
+	// Range tracks the position of the entire element
+	Range Range
+	// SelfClosing indicates if this element was self-closed with />
+	SelfClosing bool
 }
 
 func (e Element) Trailing() TrailingSpace {
@@ -625,8 +630,13 @@ func (e *Element) Write(w io.Writer, indent int) error {
 		}
 		return nil
 	}
-	if e.IsVoidElement() {
-		if err := writeIndent(w, closeAngleBracketIndent, "/>"); err != nil {
+	// Handle self-closing elements
+	if e.IsVoidElement() || e.SelfClosing {
+		closeTag := "/>"
+		if !e.IndentAttrs && e.SelfClosing && !e.IsVoidElement() {
+			closeTag = " />" // Self-closing non-void elements get a space before />
+		}
+		if err := writeIndent(w, closeAngleBracketIndent, closeTag); err != nil {
 			return err
 		}
 		return nil
@@ -1354,116 +1364,6 @@ func (ac *AttributeComment) Copy() Attribute {
 	}
 }
 
-// ElementComponent represents HTML element component syntax.
-// <Component attr="value" /> or <Component attr="value">children</Component>
-type ElementComponent struct {
-	// Name is the component name (e.g., "Button", "components.Input")
-	Name string
-	// NameRange tracks the position of the component name
-	NameRange Range
-	// Range tracks the position of the entire element
-	Range Range
-	// Attributes are the component attributes
-	Attributes []Attribute
-	// IndentAttrs indicates if attributes should be indented
-	IndentAttrs bool
-	// Children contains child elements for non-self-closing components
-	Children []Node
-	// IndentChildren indicates if children should be indented
-	IndentChildren bool
-	// SelfClosing indicates if this is a self-closing component
-	SelfClosing bool
-	// TrailingSpace tracks whitespace after the component
-	TrailingSpace TrailingSpace
-}
-
-func (el *ElementComponent) ChildNodes() []Node {
-	return el.Children
-}
-
-func (el *ElementComponent) IsNode() bool { return true }
-
-func (el *ElementComponent) Trailing() TrailingSpace {
-	return el.TrailingSpace
-}
-
-func (el *ElementComponent) hasNonWhitespaceChildren() bool {
-	for _, c := range el.Children {
-		if _, isWhitespace := c.(*Whitespace); !isWhitespace {
-			return true
-		}
-	}
-	return false
-}
-
-func (el *ElementComponent) Write(w io.Writer, indent int) error {
-	if err := writeIndent(w, indent, "<", el.Name); err != nil {
-		return err
-	}
-	for i := range el.Attributes {
-		a := el.Attributes[i]
-		// Only the conditional attributes get indented.
-		var attrIndent int
-		if el.IndentAttrs {
-			if _, err := w.Write([]byte("\n")); err != nil {
-				return err
-			}
-			attrIndent = indent + 1
-		} else {
-			if _, err := w.Write([]byte(" ")); err != nil {
-				return err
-			}
-		}
-		if err := a.Write(w, attrIndent); err != nil {
-			return err
-		}
-	}
-	var closeAngleBracketIndent int
-	if el.IndentAttrs {
-		if _, err := w.Write([]byte("\n")); err != nil {
-			return err
-		}
-		closeAngleBracketIndent = indent
-	}
-	if el.hasNonWhitespaceChildren() {
-		if el.IndentChildren {
-			if err := writeIndent(w, closeAngleBracketIndent, ">\n"); err != nil {
-				return err
-			}
-			if err := writeNodesIndented(w, indent+1, el.Children); err != nil {
-				return err
-			}
-			if err := writeIndent(w, indent, "</", el.Name, ">"); err != nil {
-				return err
-			}
-			return nil
-		}
-		if err := writeIndent(w, closeAngleBracketIndent, ">"); err != nil {
-			return err
-		}
-		if err := writeNodesWithoutIndentation(w, el.Children); err != nil {
-			return err
-		}
-		if _, err := w.Write([]byte("</" + el.Name + ">")); err != nil {
-			return err
-		}
-		return nil
-	}
-	// Self-closing when no children
-	closeTag := " />"
-	if el.IndentAttrs {
-		closeTag = "/>"
-	}
-	// Single line: space before />
-	if err := writeIndent(w, closeAngleBracketIndent, closeTag); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (el *ElementComponent) Visit(v Visitor) error {
-	return v.VisitElementComponent(el)
-}
 
 // ChildrenExpression can be used to rended the children of a templ element.
 // { children ... }

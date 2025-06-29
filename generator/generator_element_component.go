@@ -9,14 +9,14 @@ import (
 	"github.com/a-h/templ/parser/v2"
 )
 
-func (g *generator) writeElementComponent(indentLevel int, n *parser.ElementComponent) (err error) {
+func (g *generator) writeElementComponent(indentLevel int, n *parser.Element) (err error) {
 	if len(n.Children) == 0 {
 		return g.writeSelfClosingElementComponent(indentLevel, n)
 	}
 	return g.writeBlockElementComponent(indentLevel, n)
 }
 
-func (g *generator) writeSelfClosingElementComponent(indentLevel int, n *parser.ElementComponent) (err error) {
+func (g *generator) writeSelfClosingElementComponent(indentLevel int, n *parser.Element) (err error) {
 	// templ_7745c5c3_Err = Component(arg1, arg2, ...)
 	if err = g.writeElementComponentFunctionCall(indentLevel, n); err != nil {
 		return err
@@ -31,7 +31,7 @@ func (g *generator) writeSelfClosingElementComponent(indentLevel int, n *parser.
 	return nil
 }
 
-func (g *generator) writeBlockElementComponent(indentLevel int, n *parser.ElementComponent) (err error) {
+func (g *generator) writeBlockElementComponent(indentLevel int, n *parser.Element) (err error) {
 	childrenName := g.createVariableName()
 	if _, err = g.w.WriteIndent(indentLevel, childrenName+" := templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {\n"); err != nil {
 		return err
@@ -78,7 +78,7 @@ type elementComponentAttributes struct {
 	restAttrs []parser.Attribute
 }
 
-func (g *generator) writeElementComponentAttrVars(indentLevel int, n *parser.ElementComponent) ([]string, error) {
+func (g *generator) writeElementComponentAttrVars(indentLevel int, n *parser.Element) ([]string, error) {
 	panic("writeElementComponentAttrVars is not implemented yet")
 	// orderedAttrs, err := g.reorderElementComponentAttributes(sigs, n)
 	// if err != nil {
@@ -112,7 +112,7 @@ func (g *generator) writeElementComponentAttrVars(indentLevel int, n *parser.Ele
 	// return res, nil
 }
 
-func (g *generator) reorderElementComponentAttributes(n *parser.ElementComponent) (elementComponentAttributes, error) {
+func (g *generator) reorderElementComponentAttributes(n *parser.Element) (elementComponentAttributes, error) {
 	panic("reorderElementComponentAttributes is not implemented yet")
 	// rest := make([]parser.Attribute, 0)
 	// attrMap := make(map[string]parser.Attribute)
@@ -473,7 +473,7 @@ func (g *generator) writeRestAppend(indentLevel int, restVarName string, key str
 	return err
 }
 
-func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser.ElementComponent) (err error) {
+func (g *generator) writeElementComponentFunctionCall(indentLevel int, n *parser.Element) (err error) {
 	panic("writeElementComponentFunctionCall is not implemented yet")
 	// var sigs componentSignature
 	//

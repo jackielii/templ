@@ -69,8 +69,7 @@ var templateNodeParsers = []parse.Parser[Node]{
 	htmlComment,            // <!--
 	goComment,              // // or /*
 	rawElements,            // <text>, <>, or <style> element (special behaviour - contents are not parsed).
-	elementComponent,       // <Component attr="value" /> HTML Element-like component syntax
-	element,                // <a>, <br/> etc.
+	element,                // <a>, <br/> etc. (also handles <Component /> syntax)
 	ifExpression,           // if {}
 	forExpression,          // for {}
 	switchExpression,       // switch {}

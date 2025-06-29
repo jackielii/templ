@@ -67,7 +67,7 @@ var diagnosers = []diagnoser{
 }
 
 var templateDiagnosers = []templateDiagnoser{
-	missingComponentDiagnoser,
+	// missingComponentDiagnoser, // TODO: Re-enable after symbol resolver integration
 }
 
 func Diagnose(t *TemplateFile) ([]Diagnostic, error) {
@@ -155,16 +155,17 @@ type componentRef struct {
 	Position Position
 }
 
-// collectComponentReferences finds all ElementComponent references in the template
+// collectComponentReferences finds all Element references that are components in the template
 func collectComponentReferences(t *TemplateFile) []componentRef {
 	var refs []componentRef
 
 	walkTemplate(t, func(n Node) bool {
-		if comp, ok := n.(*ElementComponent); ok {
-			refs = append(refs, componentRef{
-				Name:     comp.Name,
-				Position: comp.NameRange.From,
-			})
+		if _, ok := n.(*Element); ok {
+			// At parse time, we can't definitively determine if something is a component.
+			// The symbol resolver will handle the validation.
+			// For now, we'll skip diagnostics for element references.
+			// This function could be enhanced to use heuristics (uppercase, dots) 
+			// but that would duplicate logic better left to the symbol resolver.
 		}
 		return true
 	})

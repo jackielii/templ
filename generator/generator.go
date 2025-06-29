@@ -644,8 +644,6 @@ func (g *generator) writeNode(indentLevel int, current parser.Node, next parser.
 		err = g.writeCallTemplateExpression(indentLevel, n)
 	case *parser.TemplElementExpression:
 		err = g.writeTemplElementExpression(indentLevel, n)
-	case *parser.ElementComponent:
-		err = g.writeElementComponent(indentLevel, n)
 	case *parser.IfExpression:
 		err = g.writeIfExpression(indentLevel, n, next)
 	case *parser.SwitchExpression:
@@ -1003,6 +1001,12 @@ func (g *generator) writeExpressionErrorHandler(indentLevel int, expression pars
 }
 
 func (g *generator) writeElement(indentLevel int, n *parser.Element) (err error) {
+	// Handle component elements differently from regular HTML elements
+	if n.IsComponent {
+		return g.writeComponentElement(indentLevel, n)
+	}
+
+	// Regular HTML element handling
 	if len(n.Attributes) == 0 {
 		// <div>
 		if _, err = g.w.WriteStringLiteral(indentLevel, fmt.Sprintf(`<%s>`, html.EscapeString(n.Name))); err != nil {
