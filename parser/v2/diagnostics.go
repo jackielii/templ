@@ -164,7 +164,7 @@ func collectComponentReferences(t *TemplateFile) []componentRef {
 			// At parse time, we can't definitively determine if something is a component.
 			// The symbol resolver will handle the validation.
 			// For now, we'll skip diagnostics for element references.
-			// This function could be enhanced to use heuristics (uppercase, dots) 
+			// This function could be enhanced to use heuristics (uppercase, dots)
 			// but that would duplicate logic better left to the symbol resolver.
 		}
 		return true

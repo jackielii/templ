@@ -543,7 +543,6 @@ func (attributesParser) Parse(in *parse.Input) (attributes []Attribute, ok bool,
 	return attributes, true, nil
 }
 
-
 // elementNameParser is a unified parser that accepts:
 // 1. Standard HTML elements (lowercase, optional hyphens/colons)
 // 2. Web Components (must contain hyphen, e.g., my-element)
@@ -554,68 +553,67 @@ func (attributesParser) Parse(in *parse.Input) (attributes []Attribute, ok bool,
 // is actually a component happens in the symbol resolver phase.
 var elementNameParser = parse.Func(func(in *parse.Input) (name string, matched bool, err error) {
 	start := in.Index()
-	
+
 	// We need to handle these patterns:
 	// - HTML elements: div, my-element, svg:rect
 	// - Go identifiers: Button, myComponent, _private
 	// - Qualified names: pkg.Component, struct.Field
-	
+
 	// First character must be a letter or underscore
 	first, ok := in.Peek(1)
 	if !ok {
 		return "", false, nil
 	}
-	
+
 	firstRune := rune(first[0])
 	if !unicode.IsLetter(firstRune) && firstRune != '_' {
 		return "", false, nil
 	}
-	
+
 	var result strings.Builder
-	
+
 	for {
 		r, ok := in.Peek(1)
 		if !ok {
 			break
 		}
-		
+
 		// Stop at element delimiters
 		if r == " " || r == "\t" || r == "\n" || r == "\r" || r == "/" || r == ">" {
 			break
 		}
-		
+
 		char := r[0]
 		charRune := rune(char)
-		
+
 		// Valid characters for element/component names:
 		// - Letters (Unicode)
-		// - Digits  
+		// - Digits
 		// - Underscore, hyphen, colon, period
-		if unicode.IsLetter(charRune) || unicode.IsDigit(charRune) || 
-		   char == '_' || char == '-' || char == ':' || char == '.' {
+		if unicode.IsLetter(charRune) || unicode.IsDigit(charRune) ||
+			char == '_' || char == '-' || char == ':' || char == '.' {
 			in.Take(1)
 			result.WriteString(r)
 			continue
 		}
-		
+
 		// Any other character stops parsing
 		break
 	}
-	
+
 	name = result.String()
 	if len(name) == 0 {
 		in.Seek(start)
 		return "", false, nil
 	}
-	
+
 	if len(name) > 128 {
 		err = parse.Error("element names must be < 128 characters long", in.Position())
 		return "", false, err
 	}
-	
+
 	return name, true, nil
 })
-
 
 // Void element closer.
 var voidElementCloser voidElementCloserParser

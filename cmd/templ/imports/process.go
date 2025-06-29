@@ -45,7 +45,7 @@ func updateImports(name, src string, existingImports []*ast.ImportSpec) (updated
 		}
 		importStmts += ")\n\n"
 	}
-	
+
 	// Find package declaration and insert imports after it
 	lines := strings.Split(src, "\n")
 	var pkgIndex int
@@ -55,10 +55,10 @@ func updateImports(name, src string, existingImports []*ast.ImportSpec) (updated
 			break
 		}
 	}
-	
+
 	// Reconstruct source with imports
 	modifiedSrc := strings.Join(lines[:pkgIndex+1], "\n") + "\n" + importStmts + strings.Join(lines[pkgIndex+1:], "\n")
-	
+
 	// Apply auto imports.
 	updatedGoCode, err := imports.Process(name, []byte(modifiedSrc), nil)
 	if err != nil {
@@ -89,7 +89,7 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 	// Collect all import nodes from the beginning of the file
 	var importSpecs []*ast.ImportSpec
 	var nonImportNodes []parser.TemplateFileNode
-	
+
 	for _, node := range t.Nodes {
 		if goExpr, ok := node.(*parser.TemplateFileGoExpression); ok {
 			// Check if this is an import node by looking at the AST
@@ -113,27 +113,27 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 	if _, err := generator.Generate(t, gw); err != nil {
 		return t, fmt.Errorf("failed to generate go code: %w", err)
 	}
-	
+
 	updatedImports, err := updateImports(fileName, gw.String(), importSpecs)
 	if err != nil {
 		return t, fmt.Errorf("failed to get imports from generated go code: %w", err)
 	}
-	
+
 	// Debug: log what we found
 	// fmt.Printf("DEBUG: Found %d import specs from AST\n", len(importSpecs))
 	// fmt.Printf("DEBUG: Found %d updated imports from generated code\n", len(updatedImports))
-	
+
 	// Create a minimal AST file to work with astutil
 	// We need this because astutil functions require an *ast.File
 	// Make a copy of importSpecs because astutil will modify the slice
 	fileImports := make([]*ast.ImportSpec, len(importSpecs))
 	copy(fileImports, importSpecs)
-	
+
 	dummyFile := &ast.File{
 		Name:    &ast.Ident{Name: "main"}, // package name doesn't matter for imports
 		Imports: fileImports,
 	}
-	
+
 	// Delete unused imports.
 	for _, imp := range importSpecs {
 		if !containsImport(updatedImports, imp) {
@@ -163,7 +163,7 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 		astutil.DeleteNamedImport(fset, dummyFile, name, path)
 		astutil.AddNamedImport(fset, dummyFile, name, path)
 	}
-	
+
 	// Format the imports properly
 	var updatedImportsStr string
 	if len(dummyFile.Imports) > 0 {
@@ -176,7 +176,7 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 				Specs: []ast.Spec{dummyFile.Imports[0]},
 			})
 		} else {
-			// Multiple imports  
+			// Multiple imports
 			var specs []ast.Spec
 			for _, imp := range dummyFile.Imports {
 				specs = append(specs, imp)
@@ -187,7 +187,7 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 				Specs:  specs,
 			})
 		}
-		
+
 		// Format just the import declarations
 		var buf strings.Builder
 		for _, decl := range decls {
@@ -197,10 +197,10 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 		}
 		updatedImportsStr = strings.TrimSpace(buf.String())
 	}
-	
+
 	// Reconstruct the template nodes
 	t.Nodes = nil
-	
+
 	// Add the updated imports as a single node if there are any
 	if updatedImportsStr != "" {
 		importNode := &parser.TemplateFileGoExpression{
@@ -210,10 +210,10 @@ func Process(t *parser.TemplateFile) (*parser.TemplateFile, error) {
 		}
 		t.Nodes = append(t.Nodes, importNode)
 	}
-	
+
 	// Add all non-import nodes back
 	t.Nodes = append(t.Nodes, nonImportNodes...)
-	
+
 	return t, nil
 }
 

@@ -1364,7 +1364,6 @@ func (ac *AttributeComment) Copy() Attribute {
 	}
 }
 
-
 // ChildrenExpression can be used to rended the children of a templ element.
 // { children ... }
 type ChildrenExpression struct{}
