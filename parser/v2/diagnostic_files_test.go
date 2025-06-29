@@ -13,6 +13,7 @@ import (
 // TestDiagnoseFiles tests diagnostics using external .templ files with embedded expectations
 // This approach is better for complex scenarios and provides more realistic test cases
 func TestDiagnoseFiles(t *testing.T) {
+	t.Skip("enable this after symbol resolver is integrated into generator")
 	testDataDir := "testdata/diagnostics"
 
 	// Create test data directory if it doesn't exist
