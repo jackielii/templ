@@ -654,7 +654,7 @@ if test {` + " " + `
 			if !matched {
 				t.Errorf("failed to parse at %v", input.Position())
 			}
-			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt); diff != "" {
+			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt, cmpIgnoreScopes); diff != "" {
 				t.Error(diff)
 			}
 		})
@@ -1838,7 +1838,7 @@ func TestElementParser(t *testing.T) {
 			if !matched {
 				t.Fatalf("failed to parse at %d", input.Index())
 			}
-			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt); diff != "" {
+			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt, cmpIgnoreScopes); diff != "" {
 				t.Error(diff)
 			}
 		})

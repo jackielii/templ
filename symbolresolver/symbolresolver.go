@@ -89,7 +89,6 @@ func (r *SymbolResolverV2) PreprocessFiles(files []string) error {
 		if err := r.loadPackagesForModule(moduleRoot, packageDirs); err != nil {
 			// Continue with other modules - one module's failure shouldn't stop others
 			// The error is already descriptive from loadPackagesForModule
-			// fmt.Printf("Error loading packages for module %s: %v\n", moduleRoot, err)
 			_ = err
 		}
 	}
@@ -104,6 +103,7 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 	}
 
 	cfg := &packages.Config{
+		// Mode:       packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo,
 		Mode:       packages.LoadSyntax,
 		Dir:        moduleRoot,
 		Overlay:    r.overlays,
@@ -123,8 +123,6 @@ func (r *SymbolResolverV2) loadPackagesForModule(moduleRoot string, packageDirs 
 			patterns = append(patterns, "./"+relPath)
 		}
 	}
-	// fmt.Printf("Loading packages from %s with patterns: %v\n", moduleRoot, patterns)
-
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil && len(pkgs) == 0 {
 		return fmt.Errorf("failed to load any packages: %w", err)

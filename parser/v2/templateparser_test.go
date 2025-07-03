@@ -860,7 +860,7 @@ func TestTemplateParser(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			input := parse.NewInput(tt.input)
 			actual, matched, err := template.Parse(input)
-			diff := cmp.Diff(tt.expected, actual, cmpIgnoreExpressionStmt)
+			diff := cmp.Diff(tt.expected, actual, cmpIgnoreExpressionStmt, cmpIgnoreScopes)
 			switch {
 			case tt.expectError && err == nil:
 				t.Errorf("expected an error got nil: %+v", actual)
@@ -900,7 +900,7 @@ func TestTemplateParserErrors(t *testing.T) {
 			if !matched {
 				t.Error("expected match, because there is a partial template")
 			}
-			if diff := cmp.Diff(tt.expected, err.Error(), cmpIgnoreExpressionStmt); diff != "" {
+			if diff := cmp.Diff(tt.expected, err.Error(), cmpIgnoreExpressionStmt, cmpIgnoreScopes); diff != "" {
 				t.Error(diff)
 			}
 		})

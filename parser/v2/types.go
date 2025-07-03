@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/format"
+	"go/types"
 	"io"
 	"strings"
 	"unicode"
@@ -46,6 +47,15 @@ import (
 //      </div>
 //    </div>
 // }
+
+// Scope wraps go/types.Scope for use in the parser AST.
+// The parser remains independent of Go's type system at parse time,
+// and the symbol resolver will populate this field with the appropriate
+// scope information for type checking and component resolution.
+type Scope struct {
+	// GoScope is the underlying go/types.Scope populated by the symbol resolver
+	GoScope *types.Scope
+}
 
 // Source mapping to map from the source code of the template to the
 // in-memory representation.
@@ -129,6 +139,8 @@ type TemplateFile struct {
 	Filepath string
 	// Nodes in the file.
 	Nodes []TemplateFileNode
+	// scope for the file, populated by symbol resolver
+	scope *Scope
 }
 
 func (tf *TemplateFile) Write(w io.Writer) error {
@@ -153,6 +165,14 @@ func (tf *TemplateFile) Write(w io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func (tf *TemplateFile) Scope() *Scope {
+	return tf.scope
+}
+
+func (tf *TemplateFile) SetScope(scope *Scope) {
+	tf.scope = scope
 }
 
 func (tf *TemplateFile) Visit(v Visitor) error {
@@ -392,6 +412,8 @@ type HTMLTemplate struct {
 	Range      Range
 	Expression Expression
 	Children   []Node
+	// scope for the template body, populated by symbol resolver
+	scope *Scope
 }
 
 func (t *HTMLTemplate) IsTemplateFileNode() bool { return true }
@@ -408,6 +430,14 @@ func (t *HTMLTemplate) Write(w io.Writer, indent int) error {
 		return err
 	}
 	return nil
+}
+
+func (t *HTMLTemplate) Scope() *Scope {
+	return t.scope
+}
+
+func (t *HTMLTemplate) SetScope(scope *Scope) {
+	t.scope = scope
 }
 
 func (t *HTMLTemplate) Visit(v Visitor) error {
@@ -456,6 +486,15 @@ type Node interface {
 	Visit(v Visitor) error
 }
 
+// ScopedNode is a Node that has scope information attached.
+// The scope is populated by the symbol resolver after parsing.
+type ScopedNode interface {
+	Node
+	// Scope returns the scope associated with this node.
+	// This is populated by the symbol resolver after parsing.
+	Scope() *Scope
+}
+
 type CompositeNode interface {
 	Node
 	ChildNodes() []Node
@@ -469,6 +508,13 @@ var (
 	_ WhitespaceTrailer = (*Element)(nil)
 	_ WhitespaceTrailer = (*Text)(nil)
 	_ WhitespaceTrailer = (*StringExpression)(nil)
+)
+
+// Compile-time verification that these types implement ScopedNode
+var (
+	_ ScopedNode = (*Element)(nil)
+	_ ScopedNode = (*ForExpression)(nil)
+	_ ScopedNode = (*SwitchExpression)(nil)
 )
 
 // Text node within the document.
@@ -508,10 +554,37 @@ type Element struct {
 	Range Range
 	// SelfClosing indicates if this element was self-closed with />
 	SelfClosing bool
+	// scope contains type information populated by the symbol resolver
+	// for component resolution. This is nil during parsing.
+	scope *Scope
 }
 
 func (e Element) Trailing() TrailingSpace {
 	return e.TrailingSpace
+}
+
+func (e *Element) Scope() *Scope {
+	return e.scope
+}
+
+func (e *Element) SetScope(scope *Scope) {
+	e.scope = scope
+}
+
+// IsComponent determines if this element represents a component based on its name.
+// Components are identified by:
+// - Starting with an uppercase letter (e.g., Button, Card)
+// - Containing a dot (e.g., pkg.Component, struct.Field)
+func (e *Element) IsComponent() bool {
+	if len(e.Name) == 0 {
+		return false
+	}
+	// Check if it starts with uppercase
+	if unicode.IsUpper(rune(e.Name[0])) {
+		return true
+	}
+	// Check if it contains a dot (qualified name)
+	return strings.Contains(e.Name, ".")
 }
 
 func (e *Element) Visit(v Visitor) error {
@@ -1387,11 +1460,25 @@ type IfExpression struct {
 	Then       []Node
 	ElseIfs    []ElseIfExpression
 	Else       []Node
+	// thenScope for the Then branch, populated by symbol resolver
+	thenScope *Scope
+	// elseScope for the Else branch, populated by symbol resolver
+	elseScope *Scope
 }
 
 type ElseIfExpression struct {
 	Expression Expression
 	Then       []Node
+	// scope for this ElseIf branch, populated by symbol resolver
+	scope *Scope
+}
+
+func (e *ElseIfExpression) Scope() *Scope {
+	return e.scope
+}
+
+func (e *ElseIfExpression) SetScope(scope *Scope) {
+	e.scope = scope
 }
 
 func (n IfExpression) ChildNodes() []Node {
@@ -1437,6 +1524,41 @@ func (n *IfExpression) Write(w io.Writer, indent int) error {
 	return nil
 }
 
+func (n *IfExpression) Scope() *Scope {
+	// IfExpression doesn't have a single scope, it has scopes for branches
+	// Return nil since the caller should use ThenScope() or ElseScope()
+	return nil
+}
+
+func (n *IfExpression) ThenScope() *Scope {
+	return n.thenScope
+}
+
+func (n *IfExpression) SetThenScope(scope *Scope) {
+	n.thenScope = scope
+}
+
+func (n *IfExpression) ElseScope() *Scope {
+	return n.elseScope
+}
+
+func (n *IfExpression) SetElseScope(scope *Scope) {
+	n.elseScope = scope
+}
+
+func (n *IfExpression) ElseIfScope(index int) *Scope {
+	if index >= 0 && index < len(n.ElseIfs) {
+		return n.ElseIfs[index].Scope()
+	}
+	return nil
+}
+
+func (n *IfExpression) SetElseIfScope(index int, scope *Scope) {
+	if index >= 0 && index < len(n.ElseIfs) {
+		n.ElseIfs[index].SetScope(scope)
+	}
+}
+
 func (n *IfExpression) Visit(v Visitor) error {
 	return v.VisitIfExpression(n)
 }
@@ -1447,6 +1569,8 @@ func (n *IfExpression) Visit(v Visitor) error {
 type SwitchExpression struct {
 	Expression Expression
 	Cases      []CaseExpression
+	// scope for the switch statement, populated by symbol resolver
+	scope *Scope
 }
 
 func (se SwitchExpression) ChildNodes() []Node {
@@ -1477,6 +1601,27 @@ func (se *SwitchExpression) Write(w io.Writer, indent int) error {
 	return nil
 }
 
+func (se *SwitchExpression) Scope() *Scope {
+	return se.scope
+}
+
+func (se *SwitchExpression) SetScope(scope *Scope) {
+	se.scope = scope
+}
+
+func (se *SwitchExpression) CaseScope(index int) *Scope {
+	if index >= 0 && index < len(se.Cases) {
+		return se.Cases[index].Scope()
+	}
+	return nil
+}
+
+func (se *SwitchExpression) SetCaseScope(index int, scope *Scope) {
+	if index >= 0 && index < len(se.Cases) {
+		se.Cases[index].SetScope(scope)
+	}
+}
+
 func (se *SwitchExpression) Visit(v Visitor) error {
 	return v.VisitSwitchExpression(se)
 }
@@ -1485,6 +1630,16 @@ func (se *SwitchExpression) Visit(v Visitor) error {
 type CaseExpression struct {
 	Expression Expression
 	Children   []Node
+	// scope for this case branch, populated by symbol resolver
+	scope *Scope
+}
+
+func (ce *CaseExpression) Scope() *Scope {
+	return ce.scope
+}
+
+func (ce *CaseExpression) SetScope(scope *Scope) {
+	ce.scope = scope
 }
 
 //	for i, v := range p.Addresses {
@@ -1493,6 +1648,8 @@ type CaseExpression struct {
 type ForExpression struct {
 	Expression Expression
 	Children   []Node
+	// scope for the loop body, populated by symbol resolver
+	scope *Scope
 }
 
 func (fe ForExpression) ChildNodes() []Node {
@@ -1510,6 +1667,14 @@ func (fe *ForExpression) Write(w io.Writer, indent int) error {
 		return err
 	}
 	return nil
+}
+
+func (fe *ForExpression) Scope() *Scope {
+	return fe.scope
+}
+
+func (fe *ForExpression) SetScope(scope *Scope) {
+	fe.scope = scope
 }
 
 func (fe *ForExpression) Visit(v Visitor) error {

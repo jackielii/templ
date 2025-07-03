@@ -1002,8 +1002,8 @@ func (g *generator) writeExpressionErrorHandler(indentLevel int, expression pars
 
 func (g *generator) writeElement(indentLevel int, n *parser.Element) (err error) {
 	// Handle component elements differently from regular HTML elements
-	if n.IsComponent {
-		return g.writeComponentElement(indentLevel, n)
+	if n.IsComponent() {
+		return g.writeElementComponent(indentLevel, n)
 	}
 
 	// Regular HTML element handling

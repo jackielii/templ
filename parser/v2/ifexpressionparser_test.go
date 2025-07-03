@@ -661,7 +661,7 @@ func TestIfExpression(t *testing.T) {
 			if !matched {
 				t.Fatalf("unexpected failure for input %q", tt.input)
 			}
-			if diff := cmp.Diff(tt.expected, actual, cmpIgnoreExpressionStmt); diff != "" {
+			if diff := cmp.Diff(tt.expected, actual, cmpIgnoreExpressionStmt, cmpIgnoreScopes); diff != "" {
 				t.Error(diff)
 			}
 		})

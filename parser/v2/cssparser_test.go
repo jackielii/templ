@@ -72,7 +72,7 @@ func TestExpressionCSSPropertyParser(t *testing.T) {
 			if !ok {
 				t.Fatalf("failed to parse at %d", input.Index())
 			}
-			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt); diff != "" {
+			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt, cmpIgnoreScopes); diff != "" {
 				t.Error(diff)
 			}
 		})
@@ -112,7 +112,7 @@ func TestConstantCSSPropertyParser(t *testing.T) {
 			if !ok {
 				t.Fatalf("failed to parse at %d", input.Index())
 			}
-			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt); diff != "" {
+			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt, cmpIgnoreScopes); diff != "" {
 				t.Error(diff)
 			}
 		})
@@ -326,7 +326,7 @@ background-color: { prop };
 			if !ok {
 				t.Fatalf("failed to parse at %d", input.Index())
 			}
-			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt); diff != "" {
+			if diff := cmp.Diff(tt.expected, result, cmpIgnoreExpressionStmt, cmpIgnoreScopes); diff != "" {
 				t.Error(diff)
 			}
 		})
