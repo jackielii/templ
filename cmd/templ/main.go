@@ -140,7 +140,7 @@ func generateCmd(stdout, stderr io.Writer, args []string) (code int) {
 		cancel()
 	}()
 
-	err = generatecmd.Run(ctx, stdout, stderr, args)
+	err := generatecmd.Run(ctx, stdout, stderr, args)
 	if err != nil {
 		_, _ = color.New(color.FgRed).Fprint(stderr, "(✗) ")
 		_, _ = fmt.Fprintln(stderr, "Command failed: "+err.Error())

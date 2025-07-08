@@ -109,7 +109,7 @@ func (cmd Generate) Run(ctx context.Context) (err error) {
 	var templFiles []string
 	preprocessEvents := make(chan fsnotify.Event)
 	go func() {
-		if err := watcher.WalkFiles(ctx, cmd.Args.Path, cmd.WatchPattern, preprocessEvents); err != nil {
+		if err := watcher.WalkFiles(ctx, cmd.Args.Path, cmd.Args.WatchPattern, preprocessEvents); err != nil {
 			cmd.Log.Error("Preprocessing walk failed", slog.Any("error", err))
 		}
 		close(preprocessEvents)
