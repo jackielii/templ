@@ -1,0 +1,88 @@
+package testdata
+
+import "github.com/a-h/templ"
+import "fmt"
+
+// Global variable to test file scope
+var globalVar = "global"
+
+// Function to test file scope
+func helperFunc() string {
+	return "helper"
+}
+
+// Simple template with parameter
+templ SimpleTemplate(name string) {
+	<div>Hello { name }</div>
+}
+
+// Template with multiple parameters
+templ WithMultipleParams(title string, count int) {
+	<h1>{ title }</h1>
+	<p>Count: { fmt.Sprint(count) }</p>
+}
+
+// Template with for loop
+templ WithForLoop(items []string) {
+	<ul>
+		for i, item := range items {
+			<li>{ fmt.Sprintf("%d: %s", i, item) }</li>
+		}
+	</ul>
+}
+
+// Template with if expression
+templ WithIfExpression(show bool) {
+	if show {
+		<div>Visible</div>
+	} else {
+		<div>Hidden</div>
+	}
+}
+
+// Template with local variables
+templ WithLocalVars() {
+	{{ localVar := "local value" }}
+	<div>{ localVar }</div>
+	
+	for i := 0; i < 3; i++ {
+		{{ innerVar := fmt.Sprintf("inner %d", i) }}
+		<span>{ innerVar }</span>
+	}
+}
+
+// Template with component elements
+templ ParentComponent() {
+	<div>
+		<SimpleTemplate name="from parent" />
+		<SimpleTemplate name={ helperFunc() } />
+		<WithMultipleParams title="Test" count={ 42 } />
+	</div>
+}
+
+// Template to test expression resolution
+templ ExpressionTest(user User) {
+	<div>
+		// Direct field access
+		<p>{ user.Name }</p>
+		
+		// Method call
+		<p>{ user.GetEmail() }</p>
+		
+		// Function call
+		<p>{ helperFunc() }</p>
+		
+		// Global variable
+		<p>{ globalVar }</p>
+	</div>
+}
+
+// Type definition for testing
+type User struct {
+	Name  string
+	Email string
+}
+
+func (u User) GetEmail() string {
+	return u.Email
+}
