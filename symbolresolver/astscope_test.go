@@ -523,16 +523,10 @@ func testResolveExpression(t *testing.T, exprStr string, scope *templparser.Scop
 		}
 		
 	case "i":
-		// Loop variable issue - currently resolving as untyped nil
-		// This is a known issue with fallback scope assignment
-		if basic, ok := exprType.(*types.Basic); ok {
-			if basic.Kind() == types.UntypedNil {
-				t.Logf("⚠️  Loop variable 'i' resolved as untyped nil - this is a known issue with fallback scope assignment")
-			} else if basic.Kind() != types.Int {
-				t.Errorf("loop variable i should be int, got %s", basic)
-			}
-		} else {
-			t.Errorf("loop variable i should be basic type int, got %T: %s", exprType, exprType)
+		// Loop variables should have proper types
+		typeStr := exprType.String()
+		if typeStr != "int" {
+			t.Errorf("loop variable i should be int, got %s", typeStr)
 		}
 	}
 }

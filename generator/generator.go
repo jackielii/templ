@@ -17,6 +17,7 @@ import (
 	_ "embed"
 
 	"github.com/a-h/templ/parser/v2"
+	"github.com/a-h/templ/symbolresolver"
 )
 
 type GenerateOpt func(g *generator) error
@@ -131,6 +132,16 @@ func Generate(template *parser.TemplateFile, w io.Writer, opts ...GenerateOpt) (
 			return
 		}
 	}
+	
+	// Run scope assignment to identify element components unless disabled
+	if !g.options.SkipSymbolResolution && template.Filepath != "" {
+		resolver := symbolresolver.NewSymbolResolverV2()
+		if err = resolver.PreprocessFiles([]string{template.Filepath}); err == nil {
+			// Ignore scope assignment errors in generation - we'll proceed without component detection
+			_ = resolver.AssignScopes(template)
+		}
+	}
+	
 	err = g.generate()
 	op.Options = g.options
 	op.SourceMap = g.sourceMap

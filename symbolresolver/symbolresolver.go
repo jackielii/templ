@@ -231,6 +231,31 @@ func ResolveComponent(scope *types.Scope, expr ast.Expr) (types.Type, error) {
 	return typ, nil
 }
 
+// GetOverlayContent returns the overlay content for a given template file (for debugging)
+func (r *SymbolResolverV2) GetOverlayContent(filename string) (string, error) {
+	absFilename, err := filepath.Abs(filename)
+	if err != nil {
+		return "", err
+	}
+	
+	overlayPath := strings.TrimSuffix(absFilename, ".templ") + "_templ.go"
+	
+	// Check if we have the overlay in our overlays map
+	if r.overlays != nil {
+		if content, ok := r.overlays[overlayPath]; ok {
+			return string(content), nil
+		}
+	}
+	
+	// Try to read from disk
+	content, err := os.ReadFile(overlayPath)
+	if err != nil {
+		return "", err
+	}
+	
+	return string(content), nil
+}
+
 // GetFileScope finds the file scope for a given filename
 // This is a helper for callers that need to resolve the scope from a filename
 func (r *SymbolResolverV2) GetFileScope(filename string) (*types.Scope, error) {
@@ -480,6 +505,33 @@ func ResolveExpression(expr ast.Expr, scope *types.Scope) (types.Type, error) {
 
 	case *ast.CallExpr:
 		// Function call
+		// First check if it's a built-in function
+		if ident, ok := e.Fun.(*ast.Ident); ok {
+			switch ident.Name {
+			case "len", "cap":
+				return types.Typ[types.Int], nil
+			case "make":
+				// make returns the type of its first argument
+				if len(e.Args) > 0 {
+					return ResolveExpression(e.Args[0], scope)
+				}
+			case "new":
+				// new returns a pointer to the type of its first argument
+				if len(e.Args) > 0 {
+					argType, err := ResolveExpression(e.Args[0], scope)
+					if err == nil {
+						return types.NewPointer(argType), nil
+					}
+				}
+			case "append":
+				// append returns the same type as its first argument
+				if len(e.Args) > 0 {
+					return ResolveExpression(e.Args[0], scope)
+				}
+			}
+		}
+		
+		// Not a built-in, resolve as regular function
 		fnType, err := ResolveExpression(e.Fun, scope)
 		if err != nil {
 			return nil, err

@@ -15,7 +15,12 @@ func Parse(fileName string) (*TemplateFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ParseString(string(fc))
+	tf, err := ParseString(string(fc))
+	if err != nil {
+		return nil, err
+	}
+	tf.Filepath = fileName
+	return tf, nil
 }
 
 func getDefaultPackageName(fileName string) (pkg string) {

@@ -6,12 +6,6 @@ This document provides an in-depth analysis of the symbol resolution system in t
 
 The symbol resolver is the central component for type resolution in templ, enabling proper type checking and code generation for templ templates. It leverages Go's type system through overlays instead of string-based parsing. The system has been unified into a single resolver that combines component, variable, and expression resolution capabilities.
 
-It should be used in the following way:
-
-1. at the start of the templ generation process in `../cmd/templ/generatecmd/cmd.go`, we want to add a preprocessing step that walks all the files needs generation, symbol resolver should receive these files.
-2. parse all the files and find out which ones require type analysis or symbols resolution, for a start, let's use all of them.
-4. use `golang.org/x/tools/go/packages` to load the packages and the dependencies of the packages.
-
 ### Performance Critical: Package Loading Strategy
 
 **IMPORTANT**: Always load all packages in a single `packages.Load` call rather than loading them one by one. This is a critical performance optimization that reduces processing time from over a minute to approximately 1 second.
@@ -54,18 +48,6 @@ Key points:
 - **NeedTypesInfo requires NeedTypes**: Using NeedTypesInfo alone will result in nil TypesInfo (known bug)
 - **NeedDeps is NOT required**: Dependencies are automatically loaded as needed for type checking
 - **Performance**: Using LoadSyntax without NeedDeps is ~5x faster than LoadAllSyntax
-
-### Package Caching Strategy
-
-Packages must be cached by multiple keys due to how `packages.Load` returns results:
-1. **By PkgPath**: The canonical import path (e.g., "github.com/user/project/pkg")
-2. **By ID**: May be a relative path (e.g., "./generator/test-element-component")
-3. **By Directory**: Absolute filesystem path where the package resides
-
-This multi-key caching is necessary because:
-- The same package may be referenced differently depending on context
-- Relative imports in patterns result in IDs that differ from PkgPath
-- Directory-based lookups are needed for local component resolution
 
 ### Module Boundary Limitation and Solution
 

@@ -86,3 +86,76 @@ type User struct {
 func (u User) GetEmail() string {
 	return u.Email
 }
+
+// Template with nested scopes and local variables
+templ NestedScopes(data []int) {
+	{{ total := 0 }}
+	
+	for i, val := range data {
+		{{ doubled := val * 2 }}
+		if doubled > 10 {
+			{{ msg := fmt.Sprintf("Large: %d", doubled) }}
+			<p>{ msg }</p>
+		} else {
+			{{ msg := "Small value" }}
+			<span>{ msg }</span>
+		}
+		{{ total = total + val }}
+	}
+	
+	switch {
+	case total < 10:
+		{{ result := "Low total" }}
+		<div>{ result }</div>
+	case total < 100:
+		{{ result := "Medium total" }}
+		<div>{ result }</div>
+	default:
+		{{ result := fmt.Sprintf("High total: %d", total) }}
+		<div>{ result }</div>
+	}
+}
+
+// Template with type switch
+templ TypeSwitchScopes(val interface{}) {
+	switch v := val.(type) {
+	case string:
+		{{ length := len(v) }}
+		<p>String of length { fmt.Sprint(length) }</p>
+	case int:
+		{{ doubled := v * 2 }}
+		<p>Int doubled: { fmt.Sprint(doubled) }</p>
+	case []string:
+		{{ count := len(v) }}
+		<p>Array with { fmt.Sprint(count) } items</p>
+		for i, s := range v {
+			<li>{ fmt.Sprintf("%d: %s", i, s) }</li>
+		}
+	default:
+		{{ typeName := fmt.Sprintf("%T", v) }}
+		<p>Unknown type: { typeName }</p>
+	}
+}
+
+// Template with if conditions and short declarations
+templ IfWithShortDecl(users []User) {
+	if len(users) > 0 {
+		{{ first := users[0] }}
+		if name := first.Name; name != "" {
+			{{ greeting := "Hello, " + name }}
+			<h1>{ greeting }</h1>
+		}
+	}
+}
+
+// Template with comma-ok patterns
+templ CommaOkPatterns(data map[string]int) {
+	if val, ok := data["key"]; ok {
+		<p>Found: { fmt.Sprint(val) }</p>
+	}
+	
+	{{ var iface interface{} = "test" }}
+	if str, ok := iface.(string); ok {
+		<p>String value: { str }</p>
+	}
+}

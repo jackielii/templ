@@ -557,6 +557,12 @@ type Element struct {
 	// scope contains type information populated by the symbol resolver
 	// for component resolution. This is nil during parsing.
 	scope *Scope
+	// nameExpr is the parsed expression of the element name, set by the parser
+	// This allows efficient resolution without re-parsing
+	nameExpr ast.Expr
+	// isResolvedComponent is set by the symbol resolver if this element
+	// has been verified to be a templ.Component type
+	isResolvedComponent bool
 }
 
 func (e Element) Trailing() TrailingSpace {
@@ -571,20 +577,35 @@ func (e *Element) SetScope(scope *Scope) {
 	e.scope = scope
 }
 
-// IsComponent determines if this element represents a component based on its name.
-// Components are identified by:
-// - Starting with an uppercase letter (e.g., Button, Card)
-// - Containing a dot (e.g., pkg.Component, struct.Field)
+// NameExpr returns the parsed expression of the element name.
+// If not set by the parser, it attempts to parse the name string.
+func (e *Element) NameExpr() ast.Expr {
+	if e.nameExpr != nil {
+		return e.nameExpr
+	}
+	// Fallback: parse the name string (this should rarely happen)
+	// The parser should set this field during parsing
+	expr, _ := ast.NewIdent(e.Name), error(nil)
+	return expr
+}
+
+// SetNameExpr sets the parsed expression of the element name.
+// This should be called by the parser when creating the element.
+func (e *Element) SetNameExpr(expr ast.Expr) {
+	e.nameExpr = expr
+}
+
+// SetResolvedAsComponent marks this element as a verified templ.Component type.
+// This should be called by the symbol resolver after type checking.
+func (e *Element) SetResolvedAsComponent(isComponent bool) {
+	e.isResolvedComponent = isComponent
+}
+
+// IsComponent checks if the element has been resolved as a component type.
+// This requires the element to have been processed by the symbol resolver.
+// Returns true only if the element was verified to implement templ.Component.
 func (e *Element) IsComponent() bool {
-	if len(e.Name) == 0 {
-		return false
-	}
-	// Check if it starts with uppercase
-	if unicode.IsUpper(rune(e.Name[0])) {
-		return true
-	}
-	// Check if it contains a dot (qualified name)
-	return strings.Contains(e.Name, ".")
+	return e.isResolvedComponent
 }
 
 func (e *Element) Visit(v Visitor) error {
