@@ -5,10 +5,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go/ast"
+	goparser "go/parser"
+	"go/token"
 	"html"
 	"io"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -862,6 +866,124 @@ func (g *generator) writeTemplElementExpression(indentLevel int, n *parser.Templ
 	return g.writeBlockTemplElementExpression(indentLevel, n)
 }
 
+// hoistedExpr is a templ.Hoist(...) sub-expression lifted out of a component
+// call into a preceding statement.
+type hoistedExpr struct {
+	varName string // generated temp variable bound to the lifted value
+	expr    string // source of the lifted inner expression
+	offset  int    // byte offset of the inner expression within the component-call source
+}
+
+// isHoistCall reports whether fn is a reference to templ.Hoist (or a bare Hoist,
+// to allow dot-imports). Detection is purely syntactic — no type information.
+func isHoistCall(fn ast.Expr) bool {
+	switch f := fn.(type) {
+	case *ast.SelectorExpr:
+		pkg, ok := f.X.(*ast.Ident)
+		return ok && pkg.Name == "templ" && f.Sel.Name == "Hoist"
+	case *ast.IndexExpr: // explicit type argument: templ.Hoist[string](...)
+		return isHoistCall(f.X)
+	case *ast.Ident:
+		return f.Name == "Hoist"
+	}
+	return false
+}
+
+// extractHoists parses a component-call expression, finds templ.Hoist(...) calls,
+// and rewrites each to a generated temp variable, returning the lifted
+// expressions in source order so the caller can emit them as statements before
+// the call. The whole transform is syntactic: `tmp, err := <inner>` infers the
+// temp's type, so templ never needs to know it.
+func (g *generator) extractHoists(src string) (rewritten string, hoists []hoistedExpr, err error) {
+	fset := token.NewFileSet()
+	node, perr := goparser.ParseExprFrom(fset, "", src, 0)
+	if perr != nil {
+		// Not parseable as a single expression (templ allows some forms go/parser
+		// won't accept standalone). Leave it untouched; any Hoist falls back to the
+		// runtime panic helper.
+		return src, nil, nil
+	}
+	type replacement struct {
+		start, end int
+		name       string
+	}
+	var repls []replacement
+	ast.Inspect(node, func(nd ast.Node) bool {
+		call, ok := nd.(*ast.CallExpr)
+		if !ok || !isHoistCall(call.Fun) {
+			return true
+		}
+		if len(call.Args) != 1 {
+			// Spike scope: only Hoist(singleExpr). Leave others to the fallback.
+			return false
+		}
+		arg := call.Args[0]
+		name := g.createVariableName()
+		argStart := fset.Position(arg.Pos()).Offset
+		hoists = append(hoists, hoistedExpr{
+			varName: name,
+			expr:    src[argStart:fset.Position(arg.End()).Offset],
+			offset:  argStart,
+		})
+		repls = append(repls, replacement{
+			start: fset.Position(call.Pos()).Offset,
+			end:   fset.Position(call.End()).Offset,
+			name:  name,
+		})
+		// Do not descend into the lifted argument: nested Hoist is unsupported here
+		// and would corrupt offsets.
+		return false
+	})
+	// Apply replacements right-to-left so earlier offsets stay valid.
+	sort.Slice(repls, func(i, j int) bool { return repls[i].start > repls[j].start })
+	rewritten = src
+	for _, r := range repls {
+		rewritten = rewritten[:r.start] + r.name + rewritten[r.end:]
+	}
+	return rewritten, hoists, nil
+}
+
+// writeHoists emits the lifted sub-expressions as error-checked statements before
+// a component call, and returns the rewritten call expression.
+func (g *generator) writeHoists(indentLevel int, expr parser.Expression) (rewritten string, err error) {
+	rewritten, hoists, err := g.extractHoists(expr.Value)
+	if err != nil || len(hoists) == 0 {
+		return expr.Value, err
+	}
+	for _, h := range hoists {
+		// tmp, templ_Err := <inner>   (:= infers tmp's type; err is reused)
+		if _, err = g.w.WriteIndent(indentLevel, h.varName+", templ_7745c5c3_Err := "+h.expr+"\n"); err != nil {
+			return rewritten, err
+		}
+		// Report the precise .templ location of the lifted expression, so the
+		// error names the exact failing call — the whole reason to prefer this
+		// over a panicking must() helper.
+		line, col := positionInExpr(expr, h.offset)
+		if err = g.writeErrorHandlerAtPos(indentLevel, line, col); err != nil {
+			return rewritten, err
+		}
+	}
+	return rewritten, nil
+}
+
+// positionInExpr maps a byte offset within a component-call expression back to
+// the absolute .templ line/col (templ's 0-based scheme), starting from the
+// expression's own start position.
+func positionInExpr(expr parser.Expression, offset int) (line, col int) {
+	src := expr.Value
+	if offset > len(src) {
+		offset = len(src)
+	}
+	newlines := strings.Count(src[:offset], "\n")
+	line = int(expr.Range.From.Line) + newlines
+	if newlines == 0 {
+		col = int(expr.Range.From.Col) + offset
+		return line, col
+	}
+	col = offset - (strings.LastIndex(src[:offset], "\n") + 1)
+	return line, col
+}
+
 func (g *generator) writeBlockTemplElementExpression(indentLevel int, n *parser.TemplElementExpression) (err error) {
 	var r parser.Range
 	childrenName := g.createVariableName()
@@ -890,10 +1012,14 @@ func (g *generator) writeBlockTemplElementExpression(indentLevel int, n *parser.
 	if _, err = g.w.WriteIndent(indentLevel, "})\n"); err != nil {
 		return err
 	}
+	callExpr, err := g.writeHoists(indentLevel, n.Expression)
+	if err != nil {
+		return err
+	}
 	if _, err = g.w.WriteIndent(indentLevel, `templ_7745c5c3_Err = `); err != nil {
 		return err
 	}
-	if r, err = g.w.Write(n.Expression.Value); err != nil {
+	if r, err = g.w.Write(callExpr); err != nil {
 		return err
 	}
 	g.sourceMap.Add(n.Expression, r)
@@ -908,12 +1034,16 @@ func (g *generator) writeBlockTemplElementExpression(indentLevel int, n *parser.
 }
 
 func (g *generator) writeSelfClosingTemplElementExpression(indentLevel int, n *parser.TemplElementExpression) (err error) {
+	callExpr, err := g.writeHoists(indentLevel, n.Expression)
+	if err != nil {
+		return err
+	}
 	if _, err = g.w.WriteIndent(indentLevel, `templ_7745c5c3_Err = `); err != nil {
 		return err
 	}
 	// Template expression.
 	var r parser.Range
-	if r, err = g.w.Write(n.Expression.Value); err != nil {
+	if r, err = g.w.Write(callExpr); err != nil {
 		return err
 	}
 	g.sourceMap.Add(n.Expression, r)
@@ -994,14 +1124,21 @@ func (g *generator) writeErrorHandler(indentLevel int) (err error) {
 }
 
 func (g *generator) writeExpressionErrorHandler(indentLevel int, expression parser.Expression) (err error) {
+	// expression.Range.To.Line is templ's 0-based line; writeErrorHandlerAtPos
+	// performs the +1 to display a 1-based line.
+	return g.writeErrorHandlerAtPos(indentLevel, int(expression.Range.To.Line), int(expression.Range.To.Col))
+}
+
+// writeErrorHandlerAtPos emits the standard error check, returning a
+// templ.Error tagged with a specific source location. line is templ's 0-based
+// line number; it is displayed as line+1.
+func (g *generator) writeErrorHandlerAtPos(indentLevel int, line, col int) (err error) {
 	_, err = g.w.WriteIndent(indentLevel, "if templ_7745c5c3_Err != nil {\n")
 	if err != nil {
 		return err
 	}
 	indentLevel++
-	line := int(expression.Range.To.Line + 1)
-	col := int(expression.Range.To.Col)
-	_, err = g.w.WriteIndent(indentLevel, "return	templ.Error{Err: templ_7745c5c3_Err, FileName: "+createGoString(g.options.FileName)+", Line: "+strconv.Itoa(line)+", Col: "+strconv.Itoa(col)+"}\n")
+	_, err = g.w.WriteIndent(indentLevel, "return	templ.Error{Err: templ_7745c5c3_Err, FileName: "+createGoString(g.options.FileName)+", Line: "+strconv.Itoa(line+1)+", Col: "+strconv.Itoa(col)+"}\n")
 	if err != nil {
 		return err
 	}
@@ -1426,13 +1563,20 @@ func (g *generator) writeExpressionAttribute(indentLevel int, elementName string
 }
 
 func (g *generator) writeSpreadAttributes(indentLevel int, attr *parser.SpreadAttributes) (err error) {
+	// Lift any templ.Hoist(...) inside the spread expression (e.g. a
+	// templ.Attributes{} literal value) into preceding, location-tagged
+	// statements so the error surfaces at its exact .templ call site.
+	spreadExpr, err := g.writeHoists(indentLevel, attr.Expression)
+	if err != nil {
+		return err
+	}
 	// templ.RenderAttributes(ctx, w, spreadAttrs)
 	if _, err = g.w.WriteIndent(indentLevel, `templ_7745c5c3_Err = templ.RenderAttributes(ctx, templ_7745c5c3_Buffer, `); err != nil {
 		return err
 	}
 	// spreadAttrs
 	var r parser.Range
-	if r, err = g.w.Write(attr.Expression.Value); err != nil {
+	if r, err = g.w.Write(spreadExpr); err != nil {
 		return err
 	}
 	g.sourceMap.Add(attr.Expression, r)

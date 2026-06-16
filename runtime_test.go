@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/a-h/templ"
@@ -850,6 +851,37 @@ func TestRenderAttributes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hoistFallback mimics a real (string, error)-returning helper such as
+// structpages.URLFor, so we can verify templ.Hoist's runtime fallback behaviour
+// (the panic path used only where templ does not rewrite the call).
+func hoistFallback(s string, fail bool) (string, error) {
+	if fail {
+		return "", fmt.Errorf("could not resolve %q", s)
+	}
+	return s, nil
+}
+
+func TestHoistFallback(t *testing.T) {
+	t.Run("nil error returns the value (two-value spread)", func(t *testing.T) {
+		if got := templ.Hoist(hoistFallback("/patients/42", false)); got != "/patients/42" {
+			t.Errorf("expected the wrapped value, got %q", got)
+		}
+	})
+
+	t.Run("non-nil error panics (must()-style fallback)", func(t *testing.T) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected a panic on the error fallback path")
+			}
+			if err, ok := r.(error); !ok || !strings.Contains(err.Error(), "could not resolve") {
+				t.Errorf("expected the underlying error, got %v", r)
+			}
+		}()
+		_ = templ.Hoist(hoistFallback("/missing", true))
+	})
 }
 
 func ptr[T any](x T) *T {

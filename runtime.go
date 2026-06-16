@@ -477,6 +477,33 @@ func writeStrings(w io.Writer, ss ...string) (err error) {
 	return nil
 }
 
+// Hoist marks a (value, error) sub-expression inside a component-call argument
+// (e.g. a Props struct field) so that templ generate lifts it into a statement
+// before the call and propagates the error via the template's Render error:
+//
+//	@button.Button(button.Props{Href: templ.Hoist(structpages.URLFor(ctx, Page{}))})
+//
+// generates, roughly:
+//
+//	templ_Var1, templ_Err := structpages.URLFor(ctx, Page{})
+//	if templ_Err != nil { return templ.Error{...} }
+//	templ_Err = button.Button(button.Props{Href: templ_Var1}).Render(ctx, w)
+//
+// The rewrite is purely syntactic — templ never needs the field's type.
+//
+// This function body is a graceful fallback for any Hoist call that templ does
+// NOT rewrite (e.g. one nested too deeply, or called from hand-written Go): it
+// behaves like the long-standing must() helper, panicking on a non-nil error.
+// Where templ rewrites the call, this body never runs.
+func Hoist[T any](value T, errs ...error) T {
+	for _, err := range errs {
+		if err != nil {
+			panic(err)
+		}
+	}
+	return value
+}
+
 func RenderAttributes(ctx context.Context, w io.Writer, attributes Attributer) (err error) {
 	for _, item := range attributes.Items() {
 		key := item.Key
